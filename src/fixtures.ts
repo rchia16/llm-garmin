@@ -15,7 +15,7 @@ export const demoProfile: AthleteProfile = athleteProfileSchema.parse({
     paceZoneSystem: "friel_trainingpeaks",
   },
   cycling: { powerZoneSystem: "coggan" },
-  swimming: { thresholdMethod: "css" },
+  swimming: { thresholdMethod: "css", paceZoneSystem: "joe_friel_trainingpeaks" },
 });
 
 export const demoRunningThresholdWorkout: Workout = workoutSchema.parse({

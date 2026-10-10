@@ -2,9 +2,9 @@ import { athleteProfileSchema, type AthleteProfile } from "../domain/index.js";
 
 // Profile updates validate and return new objects so recalculation remains deterministic.
 
-type BaselineSource = "manual" | "prompt" | "imported";
+export type BaselineSource = "manual" | "prompt" | "imported";
 
-type UpdateMetadata = {
+export type UpdateMetadata = {
   source?: BaselineSource;
   updatedAt?: string;
 };

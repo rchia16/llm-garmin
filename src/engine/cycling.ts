@@ -27,10 +27,12 @@ export function resolveFtpRange(
   fractions: readonly [number, number],
 ): [number, number] {
   const [lowerFraction, upperFraction] = fractions;
-  if (lowerFraction <= 0 || upperFraction <= 0 || lowerFraction > upperFraction) {
-    throw new Error("FTP fractions must be positive and ordered.");
+  if (!Number.isFinite(lowerFraction) || !Number.isFinite(upperFraction)
+    || lowerFraction < 0 || upperFraction <= 0 || lowerFraction > upperFraction) {
+    throw new Error("FTP fractions must be non-negative, finite, and ordered, with a positive upper bound.");
   }
-  return [resolveFtpFraction(ftpWatts, lowerFraction), resolveFtpFraction(ftpWatts, upperFraction)];
+  // Coggan recovery starts at zero; single FTP-fraction targets remain strictly positive.
+  return [lowerFraction === 0 ? 0 : resolveFtpFraction(ftpWatts, lowerFraction), resolveFtpFraction(ftpWatts, upperFraction)];
 }
 
 export function resolveCyclingZone(
@@ -38,7 +40,7 @@ export function resolveCyclingZone(
   zone: CyclingZone,
 ): { watts: number; rangeWatts: [number, number] } {
   const rangeWatts = resolveFtpRange(ftpWatts, cogganPowerZones[zone]);
-  return { watts: rangeWatts[0], rangeWatts };
+  return { watts: zone === "recovery" ? rangeWatts[1] : rangeWatts[0], rangeWatts };
 }
 
 export function resolveCyclingTarget(target: CyclingTarget, ftpWatts: number): CyclingTarget {

@@ -2,17 +2,26 @@ import type { RunningTarget } from "../domain/index.js";
 
 // Running intensity is calculated in speed space, then converted back to pace.
 
+// Published Friel running PACE multipliers, not the rounded speed percentages.
+// https://www.trainingpeaks.com/learn/articles/joe-friel-s-quick-guide-to-setting-zones/
+// Larger seconds/km multipliers are slower; null denotes an unbounded end.
 export const frielTrainingPeaksZones = {
-  z1_recovery: [0.65, 0.80],
-  z2_aerobic: [0.80, 0.88],
-  z3_tempo: [0.88, 0.95],
-  z4_threshold: [0.95, 1.00],
-  z5_anaerobic: [1.00, 1.10],
+  z1_recovery: [1.29, null],
+  z2_aerobic: [1.14, 1.29],
+  z3_tempo: [1.06, 1.13],
+  z4_threshold: [0.99, 1.05],
+  z5a_super_threshold: [0.97, 1.00],
+  z5b_aerobic_capacity: [0.90, 0.96],
+  z5c_anaerobic_capacity: [null, 0.90],
+  z5_aggregate: [null, 1.00],
 } as const;
 
-// These ranges represent the named Friel/TrainingPeaks threshold-speed convention.
-
 export type RunningZone = keyof typeof frielTrainingPeaksZones;
+
+export const runningZoneLabels: Readonly<Record<string, RunningZone>> = {
+  "1": "z1_recovery", "2": "z2_aerobic", "3": "z3_tempo", "4": "z4_threshold",
+  "5": "z5_aggregate", "5a": "z5a_super_threshold", "5b": "z5b_aerobic_capacity", "5c": "z5c_anaerobic_capacity",
+};
 
 export function paceStringToSecondsPerKm(value: string): number {
   const match = /^(\d+):([0-5]\d)(?:\/km)?$/.exec(value.trim());
@@ -32,6 +41,25 @@ export function secondsPerKmToPaceString(secondsPerKm: number): string {
   const minutes = Math.floor(roundedSeconds / 60);
   const seconds = roundedSeconds % 60;
   return `${minutes}:${seconds.toString().padStart(2, "0")}/km`;
+}
+
+export function runningPaceLabel(resolved: NonNullable<RunningTarget["resolved"]>): string {
+  const pace = secondsPerKmToPaceString(resolved.paceSecPerKm);
+  if (resolved.paceBoundary !== undefined) {
+    const prefix = { slower_than: ">", faster_than: "<", at_or_faster_than: "≤" }[resolved.paceBoundary];
+    return `${prefix}${pace}`;
+  }
+  const range = resolved.rangePaceSecPerKm;
+  return range === undefined ? pace : `${secondsPerKmToPaceString(range[0]).replace("/km", "")}–${secondsPerKmToPaceString(range[1])}`;
+}
+
+export function parseRunningPaceText(value: string): { paceSecPerKm: number; rangePaceSecPerKm?: [number, number] } | undefined {
+  const match = /^(\d+:[0-5]\d)(?:\s*[-–—]\s*(\d+:[0-5]\d))?\s*(?:(?:min(?:utes?)?\s*)?\/\s*km)?$/i.exec(value.trim());
+  if (match === null) return undefined;
+  const fast = paceStringToSecondsPerKm(match[1]!);
+  const slow = match[2] === undefined ? undefined : paceStringToSecondsPerKm(match[2]);
+  if (!Number.isFinite(fast) || fast <= 0 || (slow !== undefined && (!Number.isFinite(slow) || slow <= 0 || fast > slow))) return undefined;
+  return slow === undefined ? { paceSecPerKm: fast } : { paceSecPerKm: fast, rangePaceSecPerKm: [fast, slow] };
 }
 
 export function paceToMetresPerSecond(secondsPerKm: number): number {
@@ -76,9 +104,18 @@ export function resolveThresholdSpeedRange(
 export function resolveRunningZone(
   thresholdPaceSecPerKm: number,
   zone: RunningZone,
-): { paceSecPerKm: number; rangePaceSecPerKm: [number, number] } {
-  const fractions = frielTrainingPeaksZones[zone];
-  const rangePaceSecPerKm = resolveThresholdSpeedRange(thresholdPaceSecPerKm, fractions);
+): { paceSecPerKm: number; rangePaceSecPerKm?: [number, number]; paceBoundary?: "slower_than" | "faster_than" | "at_or_faster_than" } {
+  if (!Number.isFinite(thresholdPaceSecPerKm) || thresholdPaceSecPerKm <= 0) throw new Error("Running threshold pace must be positive and finite.");
+  const [fastMultiplier, slowMultiplier] = frielTrainingPeaksZones[zone];
+  // Convert published pace ratios to inverse speed fractions before scaling.
+  const scale = (multiplier: number): number => Math.round(resolveThresholdSpeedFraction(thresholdPaceSecPerKm, 1 / multiplier) * 1_000_000) / 1_000_000;
+  if (fastMultiplier === null || slowMultiplier === null) {
+    return {
+      paceSecPerKm: scale(fastMultiplier ?? slowMultiplier ?? 1),
+      paceBoundary: zone === "z1_recovery" ? "slower_than" : zone === "z5_aggregate" ? "at_or_faster_than" : "faster_than",
+    };
+  }
+  const rangePaceSecPerKm: [number, number] = [scale(fastMultiplier), scale(slowMultiplier)];
   return {
     paceSecPerKm: rangePaceSecPerKm[0],
     rangePaceSecPerKm,

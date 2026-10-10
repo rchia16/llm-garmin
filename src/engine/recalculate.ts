@@ -15,7 +15,11 @@ function rescaleExplicitTarget(target: Target, previous: AthleteProfile, current
     const currentBaseline = current.running.thresholdPaceSecPerKm?.value;
     if (previousBaseline === undefined || currentBaseline === undefined) return target;
     const paceSecPerKm = target.paceSecPerKm * currentBaseline / previousBaseline;
-    return { ...target, paceSecPerKm, resolved: { kind: "running_pace", paceSecPerKm } };
+    const rangePaceSecPerKm: [number, number] | undefined = target.rangePaceSecPerKm === undefined ? undefined : [
+      target.rangePaceSecPerKm[0] * currentBaseline / previousBaseline,
+      target.rangePaceSecPerKm[1] * currentBaseline / previousBaseline,
+    ];
+    return { ...target, paceSecPerKm, ...(rangePaceSecPerKm === undefined ? {} : { rangePaceSecPerKm }), resolved: { kind: "running_pace", paceSecPerKm, ...(rangePaceSecPerKm === undefined ? {} : { rangePaceSecPerKm }) } };
   }
   if (target.sport === "cycling") {
     const previousBaseline = previous.cycling.ftpWatts?.value;

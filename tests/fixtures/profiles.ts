@@ -6,7 +6,7 @@ export const emptyProfile: AthleteProfile = athleteProfileSchema.parse({
   id: "athlete-1",
   running: { paceZoneSystem: "friel_trainingpeaks" },
   cycling: { powerZoneSystem: "coggan" },
-  swimming: { thresholdMethod: "css" },
+  swimming: { thresholdMethod: "css", paceZoneSystem: "joe_friel_trainingpeaks" },
 });
 
 export const completeProfile: AthleteProfile = athleteProfileSchema.parse({
@@ -22,6 +22,7 @@ export const completeProfile: AthleteProfile = athleteProfileSchema.parse({
   swimming: {
     thresholdPaceSecPer100m: { value: 90, source: "manual", updatedAt: "2026-01-01T08:00:00.000Z" },
     thresholdMethod: "css",
+    paceZoneSystem: "joe_friel_trainingpeaks",
     poolLengthMeters: 25,
   },
 });

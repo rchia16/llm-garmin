@@ -4,6 +4,7 @@ import { z } from "zod";
 
 const positiveNumber = z.number().finite().positive();
 const nonNegativeNumber = z.number().finite().nonnegative();
+const orderedPaceRange = z.tuple([positiveNumber, positiveNumber]).refine(([fast, slow]) => fast <= slow, "Pace range must be ordered from faster to slower.");
 
 export const sportSchema = z.enum(["running", "cycling", "swimming"]);
 export type Sport = z.infer<typeof sportSchema>;
@@ -22,11 +23,12 @@ const runningResolvedSchema = z.object({
   kind: z.literal("running_pace"),
   paceSecPerKm: positiveNumber,
   rangePaceSecPerKm: z.tuple([positiveNumber, positiveNumber]).optional(),
+  paceBoundary: z.enum(["slower_than", "faster_than", "at_or_faster_than"]).optional(),
 });
 const cyclingResolvedSchema = z.object({
   kind: z.literal("cycling_power"),
   watts: positiveNumber,
-  rangeWatts: z.tuple([positiveNumber, positiveNumber]).optional(),
+  rangeWatts: z.tuple([nonNegativeNumber, positiveNumber]).optional(),
 });
 const swimmingResolvedSchema = z.object({
   kind: z.literal("swimming_pace"),
@@ -34,12 +36,17 @@ const swimmingResolvedSchema = z.object({
   rangePaceSecPer100m: z.tuple([positiveNumber, positiveNumber]).optional(),
 });
 
+export const runningZoneNames = ["z1_recovery", "z2_aerobic", "z3_tempo", "z4_threshold", "z5a_super_threshold", "z5b_aerobic_capacity", "z5c_anaerobic_capacity", "z5_aggregate"] as const;
+// Old five-zone workouts retain plain Z5 as the family, not an invented subzone.
+export const runningZoneSchema = z.preprocess((value) => value === "z5_anaerobic" ? "z5_aggregate" : value, z.enum(runningZoneNames));
+
 export const runningTargetSchema = z.discriminatedUnion("prescriptionKind", [
   z.object({
     sport: z.literal("running"),
     prescriptionKind: z.literal("explicit_pace"),
     source: z.literal("explicit"),
     paceSecPerKm: positiveNumber,
+    rangePaceSecPerKm: orderedPaceRange.optional(),
     resolved: runningResolvedSchema,
   }),
   z.object({
@@ -54,7 +61,7 @@ export const runningTargetSchema = z.discriminatedUnion("prescriptionKind", [
     prescriptionKind: z.literal("pace_zone"),
     source: z.literal("profile_derived"),
     zoneSystem: z.literal("friel_trainingpeaks"),
-    zone: z.enum(["z1_recovery", "z2_aerobic", "z3_tempo", "z4_threshold", "z5_anaerobic"]),
+    zone: runningZoneSchema,
     resolved: runningResolvedSchema.optional(),
   }),
 ]);
@@ -101,6 +108,23 @@ export const swimmingTargetSchema = z.discriminatedUnion("prescriptionKind", [
     offsetSecPer100m: z.number().finite(),
     resolved: swimmingResolvedSchema.optional(),
   }),
+  z.object({
+    sport: z.literal("swimming"),
+    prescriptionKind: z.literal("pace_zone"),
+    source: z.literal("profile_derived"),
+    zoneSystem: z.literal("joe_friel_trainingpeaks"),
+    zone: z.enum([
+      "z1_recovery",
+      "z2_aerobic",
+      "z3_tempo",
+      "z4_threshold",
+      "z5_aggregate",
+      "z5a_super_threshold",
+      "z5b_anaerobic_endurance",
+      "z5c_power",
+    ]),
+    resolved: swimmingResolvedSchema.optional(),
+  }),
 ]);
 export type SwimmingTarget = z.infer<typeof swimmingTargetSchema>;
 
@@ -135,8 +159,8 @@ export type RepeatStep = {
 };
 export type WorkoutStep = ExecutableStep | RepeatStep;
 
-export const executableStepSchema: z.ZodType<ExecutableStep> = executableStepBase;
-export const repeatStepSchema: z.ZodType<RepeatStep> = z.lazy(() =>
+export const executableStepSchema: z.ZodType<ExecutableStep, z.ZodTypeDef, unknown> = executableStepBase;
+export const repeatStepSchema: z.ZodType<RepeatStep, z.ZodTypeDef, unknown> = z.lazy(() =>
   z.object({
     id: z.string().min(1),
     type: z.literal("repeat"),
@@ -168,6 +192,7 @@ export const athleteProfileSchema = z.object({
   swimming: z.object({
     thresholdPaceSecPer100m: baselineMetadataSchema.optional(),
     thresholdMethod: z.enum(["css", "t_time", "user_defined"]),
+    paceZoneSystem: z.literal("joe_friel_trainingpeaks").default("joe_friel_trainingpeaks"),
     poolLengthMeters: positiveNumber.optional(),
   }),
 });

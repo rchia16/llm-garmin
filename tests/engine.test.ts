@@ -1,12 +1,17 @@
 import { describe, expect, it } from "vitest";
+import { workoutSchema } from "../src/domain/index.js";
 import {
+  cyclingZoneTarget,
+  explicitCyclingWatts,
   paceStringToSecondsPerKm,
   paceToMetresPerSecond,
   recalculateWorkout,
   resolveFtpRange,
   resolveFtpFraction,
+  resolveCyclingZone,
   resolveThresholdSpeedRange,
   resolveSwimmingOffset,
+  resolveSwimmingZone,
   resolveWorkoutTargets,
   secondsPerKmToPaceString,
   updateCyclingFTP,
@@ -55,6 +60,32 @@ describe("cycling and swimming calculations", () => {
     expect(recalculateWorkout(cyclingExplicitWorkout, updateCyclingFTP(completeProfile, 310)).steps[0]?.target?.resolved).toMatchObject({ watts: 300 });
   });
 
+  it("resolves zero-based recovery ranges and recalculates bike zones after FTP changes", () => {
+    expect(resolveFtpRange(300, [0, 0.55])).toEqual([0, 165]);
+    expect(resolveCyclingZone(300, "recovery")).toEqual({ watts: 165, rangeWatts: [0, 165] });
+    expect(() => resolveFtpRange(300, [-0.1, 0.55])).toThrow();
+    expect(() => resolveFtpRange(300, [0.55, 0])).toThrow();
+
+    const workout = workoutSchema.parse({
+      ...cyclingWorkout,
+      steps: [
+        { id: "recovery", type: "recovery", duration: { kind: "time", seconds: 120 }, target: cyclingZoneTarget("recovery") },
+        { id: "endurance", type: "work", duration: { kind: "time", seconds: 600 }, target: cyclingZoneTarget("endurance") },
+        { id: "explicit", type: "work", duration: { kind: "time", seconds: 60 }, target: explicitCyclingWatts(200) },
+      ],
+    });
+    const first = resolveWorkoutTargets(workout, completeProfile).workout;
+    expect(workoutSchema.parse(first).steps[0]?.target?.resolved).toEqual({ kind: "cycling_power", watts: 165, rangeWatts: [0, 165] });
+
+    const changed = recalculateWorkout(first, updateCyclingFTP(completeProfile, 320));
+    expect(changed.steps[0]?.target?.resolved).toEqual({ kind: "cycling_power", watts: 176, rangeWatts: [0, 176] });
+    const endurance = changed.steps[1]?.target?.resolved;
+    if (endurance?.kind !== "cycling_power") throw new Error("Expected resolved cycling power.");
+    expect(endurance.watts).toBeCloseTo(179.2);
+    expect(endurance.rangeWatts?.[1]).toBe(240);
+    expect(changed.steps[2]?.target?.resolved).toEqual({ kind: "cycling_power", watts: 200 });
+  });
+
   it("resolves CSS offsets in either direction", () => {
     expect(resolveSwimmingOffset(90, 5)).toBe(95);
     expect(resolveSwimmingOffset(90, -2)).toBe(88);
@@ -62,6 +93,23 @@ describe("cycling and swimming calculations", () => {
     expect(result.steps[0]?.target?.resolved).toMatchObject({ paceSecPer100m: 95 });
     expect(updateSwimmingThreshold(completeProfile, 87).swimming.thresholdPaceSecPer100m?.value).toBe(87);
     expect(recalculateWorkout(swimmingExplicitWorkout, updateSwimmingThreshold(completeProfile, 87)).steps[0]?.target?.resolved).toMatchObject({ paceSecPer100m: 95 });
+  });
+
+  it("uses TrainingPeaks Joe Friel swimming pace-zone boundaries", () => {
+    expect(resolveSwimmingZone(100, "z2_aerobic")).toEqual({
+      paceSecPer100m: 114,
+      rangePaceSecPer100m: [114, 129],
+    });
+    expect(resolveSwimmingZone(100, "z4_threshold")).toEqual({
+      paceSecPer100m: 101,
+      rangePaceSecPer100m: [101, 105],
+    });
+    expect(resolveSwimmingZone(100, "z5a_super_threshold")).toEqual({
+      paceSecPer100m: 97,
+      rangePaceSecPer100m: [97, 100],
+    });
+    expect(resolveSwimmingZone(100, "z1_recovery")).toEqual({ paceSecPer100m: 130 });
+    expect(resolveSwimmingZone(100, "z5c_power")).toEqual({ paceSecPer100m: 89 });
   });
 
   it("supports deliberate compatible explicit rescaling", () => {

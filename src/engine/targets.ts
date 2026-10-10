@@ -21,6 +21,17 @@ export function thresholdRunningTarget(fraction = 1): RunningTarget {
   };
 }
 
+export function explicitRunningPaceRange(fastPaceSecPerKm: number, slowPaceSecPerKm: number): RunningTarget {
+  if (!Number.isFinite(fastPaceSecPerKm) || !Number.isFinite(slowPaceSecPerKm) || fastPaceSecPerKm <= 0 || fastPaceSecPerKm > slowPaceSecPerKm) {
+    throw new Error("Explicit running pace range must be positive, finite, and ordered from faster to slower.");
+  }
+  const rangePaceSecPerKm: [number, number] = [fastPaceSecPerKm, slowPaceSecPerKm];
+  return {
+    sport: "running", prescriptionKind: "explicit_pace", source: "explicit", paceSecPerKm: fastPaceSecPerKm, rangePaceSecPerKm,
+    resolved: { kind: "running_pace", paceSecPerKm: fastPaceSecPerKm, rangePaceSecPerKm },
+  };
+}
+
 export function runningZoneTarget(zone: keyof typeof import("./running.js").frielTrainingPeaksZones): RunningTarget {
   return {
     sport: "running",
@@ -61,4 +72,21 @@ export function explicitSwimmingPace(paceSecPer100m: number): SwimmingTarget {
 
 export function swimmingThresholdOffset(offsetSecPer100m: number): SwimmingTarget {
   return { sport: "swimming", prescriptionKind: "threshold_offset", source: "profile_derived", offsetSecPer100m };
+}
+
+export function swimmingZoneTarget(zone: keyof typeof import("./swimming.js").joeFrielTrainingPeaksSwimmingZones): SwimmingTarget {
+  return {
+    sport: "swimming",
+    prescriptionKind: "pace_zone",
+    source: "profile_derived",
+    zoneSystem: "joe_friel_trainingpeaks",
+    zone,
+  };
+}
+
+// Default running prescriptions are semantic; the running engine resolves them from threshold pace.
+export function defaultRunningTarget(stepType: "warmup" | "work" | "recovery" | "cooldown" | "rest"): RunningTarget | undefined {
+  if (stepType === "work") return thresholdRunningTarget();
+  if (stepType === "warmup" || stepType === "recovery" || stepType === "cooldown") return runningZoneTarget("z1_recovery");
+  return undefined;
 }
