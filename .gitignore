@@ -14,6 +14,14 @@ data/*.db-*
 .env.*
 !.env.example
 
+# Experimental Python bridge: private authentication data and environments
+garmin-private/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
 # Models and temporary files
 *.gguf
 *.tmp

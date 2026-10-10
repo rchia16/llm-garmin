@@ -107,6 +107,7 @@ textarea:focus, input:focus { border-color: var(--ink); box-shadow: 3px 3px 0 va
 .calendar-day.selected { color: var(--paper); background: var(--coral); font-weight: 700; }
 .primary-button, .save-button { width: 100%; display: flex; justify-content: space-between; align-items: center; border: 0; padding: 14px 16px; margin-top: 25px; color: var(--paper); background: var(--coral); font-size: 12px; font-weight: 700; transition: transform .18s, box-shadow .18s; }
 .primary-button:disabled { opacity: .6; cursor: wait; }
+.save-button:disabled { opacity: .5; cursor: not-allowed; }
 .primary-button:hover, .save-button:hover { transform: translate(-3px, -3px); box-shadow: 5px 5px 0 var(--ink); }
 .primary-button b, .save-button b { font-size: 18px; font-weight: 400; }
 .model-error { display: grid; gap: 5px; margin-top: 12px; padding: 11px 12px; border-left: 3px solid var(--coral); color: var(--ink); background: color-mix(in srgb, var(--coral) 9%, var(--paper)); font-size: 10px; line-height: 1.45; }
@@ -217,3 +218,15 @@ footer b { color: var(--coral); }
 @media (max-width: 1050px) { .workspace { grid-template-columns: 1fr 1.3fr; }.profile-rail { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr 1fr; gap: 0 26px; }.profile-rail .rail-top, .profile-rail h2, .profile-rail .rail-copy { grid-column: 1 / -1; }.profile-rail h2 { margin-top: 25px; }.profile-rail .field-label { margin-top: 25px; }.save-button { margin-top: 25px; } }
 @media (max-width: 720px) { .shell { padding: 0 20px; }.topbar { height: 70px; }.topbar-right { gap: 10px; }.topbar-right .phase-tag { display: none; }.intro { display: block; padding: 52px 0 40px; }.intro-copy { margin-top: 24px; }.workspace { display: flex; flex-direction: column; }.panel, .profile-rail { width: 100%; }.profile-rail { display: block; }.profile-rail h2 { margin-top: 40px; }.profile-rail .field-label { margin-top: 38px; } h1 { font-size: 3.35rem; }.panel-heading { padding-bottom: 20px; }.panel-state { max-width: 110px; text-align: right; }.step { grid-template-columns: 13px 1fr; padding: 11px 0; }.step-target, .step > .step-actions { grid-column: 2; align-items: start; text-align: left; flex-direction: row; }.repeat-heading { grid-template-columns: 13px 1fr; padding: 7px 0; }.repeat-heading > .duration, .repeat-heading > .step-actions { grid-column: 2; }.step-actions { opacity: 1; }.drag-handle { display: none; }.repeat-children { padding-left: 9px; }.add-controls button { flex: 1 1 auto; }.workout-heading { display: block; }.date-chip { display: inline-block; margin-top: 16px; } footer { display: block; line-height: 2; } }
 @media (max-width: 420px) { .workout-metric { padding: 11px 7px; }.workout-metric strong { font-size: 14px; }.workout-metric small { font-size: 9px; } }
+.garmin-login {
+  width: min(420px, calc(100vw - 48px));
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 24px;
+  background: var(--paper);
+  color: var(--ink);
+}
+.garmin-login::backdrop { background: rgba(0, 0, 0, .55); }
+.garmin-login input { width: 100%; box-sizing: border-box; padding: 12px; margin: 8px 0 16px; }
+.garmin-login h2 { margin-bottom: 16px; }
+.garmin-login p { font-size: 13px; line-height: 1.5; }

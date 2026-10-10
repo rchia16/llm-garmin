@@ -1,4 +1,7 @@
 import "./styles.css";
+import { garminConfirmation, garminOperationId, requestGarmin } from "./garminClient.js";
+import { garminResultMessage } from "../local/garminProtocol.js";
+import { showGarminLogin } from "./garminLogin.js";
 import {
   demoProfile,
   demoRunningThresholdWorkout,
@@ -104,6 +107,9 @@ let calendarOpen = false;
 let calendarMonth = selectedDate.slice(0, 7);
 let notice = "Ready for review";
 let jsonExportWarnings: string[] = [];
+let garminBusy = false;
+let garminReady = false;
+let garminStatus = "Optional experimental integration. Connect Garmin or check your saved session.";
 let modelBusy = false;
 let modelError: string | undefined;
 let interpretationWarnings: string[] = [];
@@ -488,6 +494,10 @@ function render(): void {
           <button class="save-button" id="save-button" type="button"><span>Save locally</span><b>↓</b></button>
           <button class="save-button" id="fit-export-button" type="button"><span>Download workout FIT</span><b>↓</b></button>
           <button class="save-button" id="garmin-json-export-button" type="button"><span>Download Garmin Connect JSON</span><b>↓</b></button>
+          <button class="save-button" id="garmin-check-button" type="button" ${garminBusy ? "disabled" : ""}><span>Check Garmin connection</span></button>
+          <button class="save-button" id="garmin-login-button" type="button" ${garminBusy ? "disabled" : ""}><span>${garminReady ? "Disconnect Garmin" : "Connect Garmin"}</span></button>
+          <button class="save-button" id="garmin-send-button" type="button" ${garminBusy || !garminReady ? "disabled" : ""}><span>${garminBusy ? "Contacting Garmin…" : "Send to Garmin & schedule"}</span></button>
+          <p class="save-note" role="status"><strong>Experimental Garmin integration</strong><br />${escapeHtml(garminStatus)}</p>
           <p class="save-note">Neither download schedules or syncs to Garmin. Import JSON with a compatible third-party Garmin Connect browser extension, then inspect the steps before scheduling. Saved workouts stay in this browser; SQLite remains available to the local Node engine.</p>
           ${jsonExportWarnings.length === 0 ? "" : `<div class="model-error" role="status"><strong>Check after JSON import</strong><ul>${jsonExportWarnings.map((warning) => `<li>${escapeHtml(warning)}</li>`).join("")}</ul></div>`}
         </aside>
@@ -906,8 +916,57 @@ function render(): void {
     }
     render();
   });
+  document.querySelector<HTMLButtonElement>("#garmin-login-button")?.addEventListener("click", async () => {
+    if (garminBusy) return;
+    if (!garminReady) {
+      showGarminLogin((result) => { garminReady = result.ok; garminStatus = garminResultMessage(result); render(); });
+      return;
+    }
+    if (!window.confirm("Remove the local Garmin session? Existing workouts and scheduling receipts will be kept.")) return;
+    garminBusy = true; render();
+    try {
+      const result = await requestGarmin("logout");
+      if (result.ok) garminReady = false;
+      garminStatus = garminResultMessage(result);
+    } finally { garminBusy = false; render(); }
+  });
+  document.querySelector<HTMLButtonElement>("#garmin-check-button")?.addEventListener("click", async () => {
+    if (garminBusy) return;
+    garminBusy = true;
+    garminStatus = "Checking local Garmin session…";
+    render();
+    try {
+      const result = await requestGarmin("status");
+      garminReady = result.ok && result.code === "READY";
+      garminStatus = garminResultMessage(result);
+    } finally { garminBusy = false; render(); }
+  });
+  document.querySelector<HTMLButtonElement>("#garmin-send-button")?.addEventListener("click", async () => {
+    if (garminBusy || !garminReady) return;
+    // Freeze exactly the reviewed data confirmed by the user, even if edits follow.
+    const confirmedWorkout = structuredClone(workout);
+    const confirmedProfile = structuredClone(profile);
+    const confirmedDate = selectedDate;
+    try {
+      if (!window.confirm(garminConfirmation(confirmedWorkout, confirmedProfile, confirmedDate))) return;
+      garminBusy = true;
+      garminStatus = "Uploading, checking workout, and verifying calendar…";
+      render();
+      const operationId = await garminOperationId(confirmedWorkout, confirmedProfile, confirmedDate);
+      const result = await requestGarmin("send", { workout: confirmedWorkout, profile: confirmedProfile, date: confirmedDate, operationId });
+      garminStatus = `${garminResultMessage(result)} (${confirmedWorkout.name}, ${confirmedDate})`;
+      if (["AUTH_REQUIRED", "SETUP_REQUIRED", "UNAVAILABLE"].includes(result.code)) garminReady = false;
+    } catch {
+      garminStatus = "Could not prepare the Garmin request. Check resolved targets and browser storage; local downloads remain available.";
+    } finally { garminBusy = false; render(); }
+  });
 }
 
 render();
+void requestGarmin("status").then((result) => {
+  garminReady = result.ok && result.code === "READY";
+  garminStatus = garminResultMessage(result);
+  render();
+});
 void refreshGb10Status();
 setInterval(() => { void refreshGb10Status(); }, 10_000);

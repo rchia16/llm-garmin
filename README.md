@@ -22,7 +22,7 @@ It currently provides:
 - Garmin Connect workout JSON download for optional third-party browser-extension import
 - a replaceable structured-output model adapter for local `llama-server`
 
-It deliberately does not include Garmin account scheduling/sync, TrainingPeaks, or cloud services.
+An optional Phase 5 experimental local Python bridge can upload and schedule reviewed workouts in Garmin Connect, with read-back verification. It uses unofficial endpoints and still needs user-confirmed live account/device validation. TrainingPeaks and cloud services are not included.
 
 ## Create workouts without an LLM
 
@@ -177,9 +177,85 @@ The Review summary shows planned time and distance. Nested repeats are counted a
 
 After reviewing a workout, select **Download workout FIT**. The export validates the canonical workout, writes a FIT *workout* (not an activity), and checks its CRC and step count by decoding the result. It preserves sport, order, time/distance, repeats, and resolved run-speed/bike-power targets. Profile-derived targets require their baselines before export. Swim stroke/equipment notes are preserved, but when a stroke is the FIT target, CSS-derived pace is written as a cue in notes rather than a second enforced target. The selected date appears in the download filename; a FIT workout file alone does not schedule that day on a Garmin calendar. The official FIT SDK is loaded only when exporting.
 
-**Download Garmin Connect JSON** converts the same reviewed workout into Garmin's workout JSON shape with nested repeat groups. It includes resolved running pace as speed, cycling zones/custom watts, and swim stroke plus secondary pace. This JSON is intended for import through a compatible third-party browser extension such as [Garmin Workout Importer](https://github.com/estruyf/garmin-workout-browser-extension); the app does not log in to Garmin or upload it. The adapter flags custom bike watts, time-based swim steps, and swim pace for visual verification after import. Garmin Connect may interpret these differently, and this project has not yet performed a live account/device compatibility test. The selected date is only in the filename; schedule the imported workout explicitly in Connect, then sync your device. Do not use Connect's activity-file importer for either workout file.
+**Download Garmin Connect JSON** converts the same reviewed workout into Garmin's workout JSON shape with nested repeat groups. It includes resolved running pace as speed, cycling zones/custom watts, and swim stroke plus secondary pace. This download can be imported through a compatible third-party browser extension such as [Garmin Workout Importer](https://github.com/estruyf/garmin-workout-browser-extension). The adapter flags custom bike watts, time-based swim steps, and swim pace for visual verification after import. Garmin Connect may interpret these differently, and this project has not yet performed a live account/device compatibility test. The selected date is only in the filename; schedule the imported workout explicitly in Connect, then sync your device. Alternatively, use the optional experimental bridge below to upload and schedule from the app. Do not use Connect's activity-file importer for either workout file.
 
-Garmin Connect currently has a documented wireless path for workouts **already in Connect**: add the workout to its calendar in the phone app, then sync the paired device. This app does not yet create the workout in Connect, and Garmin's course/activity import instructions should not be treated as workout import instructions. USB-free one-click delivery requires a later, separately authorized integration and read-back verification. FIT download remains a local fallback.
+Garmin Connect has a wireless path for workouts **already in Connect**: add the workout to its calendar, then sync the paired device. The experimental bridge verifies the Connect workout/calendar entry, not delivery to your watch. Garmin's course/activity import instructions should not be treated as workout import instructions. FIT download remains a local fallback.
+
+## Experimental Garmin Connect upload and scheduling
+
+This optional integration uses the unofficial [python-garminconnect client](https://github.com/cyberjunky/python-garminconnect), isolated from workout creation and FIT export. No official Garmin developer approval, browser extension, GB10 account or USB cable is required. Garmin may change its private endpoints at any time. Creating `.env` alone does not log in or grant account access.
+
+### First-time setup (Windows)
+
+Install **Python 3.12 or newer**, including the Python launcher, if it is not already installed. From the project folder, create the optional environment and install the pinned bridge dependencies:
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r python/requirements.txt
+```
+
+Do not overwrite a virtual environment used for something else. If you already created this project's `.venv` with Python 3.10/3.11, create a Python 3.12 environment for the project before continuing. The normal app does not require Python. On Linux/macOS, use `python3.12 -m venv .venv` and `.venv/bin/python` instead.
+
+### Private configuration and login
+
+Keep application source in this repository, workout exports in a folder such as `Documents/LocalWorkoutBuilder/Exports`, and private Garmin session/token files outside the repository. On Windows, the recommended private location is `%LOCALAPPDATA%\LocalWorkoutBuilder\garmin` (normally `C:\Users\YOUR_USERNAME\AppData\Local\LocalWorkoutBuilder\garmin`). Do not place authentication files in shared or cloud-synced folders. Session tokens are sensitive credentials, even when no password is stored.
+
+To prepare local configuration in PowerShell from the project folder:
+
+```powershell
+# First-time setup only; do not overwrite an existing .env.
+if (-not (Test-Path -LiteralPath .env)) {
+    Copy-Item -LiteralPath .env.example -Destination .env
+}
+notepad .env
+```
+
+Optionally enter `GARMIN_EMAIL`, and set `GARMIN_SESSION_DIR` to a dedicated absolute private path outside the repository. Leave it blank for the OS-specific default. On Linux the default is `$XDG_DATA_HOME/LocalWorkoutBuilder/garmin` or `~/.local/share/LocalWorkoutBuilder/garmin`; on macOS it is `~/Library/Application Support/LocalWorkoutBuilder/garmin`. Symlink/junction paths are rejected. Environment-variable syntax such as `$env:LOCALAPPDATA` and `~` is not expanded in `.env` values. The bridge explicitly reads only these two settings from the repository-root `.env`; existing environment values take precedence.
+
+Start the app and choose **Connect Garmin** in Review. Enter your Garmin email and password, then the verification code if Garmin asks for MFA. The password is cleared after submission; credentials go only to the localhost bridge and Garmin, never the LLM/GB10 or browser storage. Failed login preserves your saved session. Attempts expire after three minutes; Cancel stops the pending login.
+
+The app checks its saved session once on opening. **Disconnect Garmin** removes that local session without deleting receipts or Garmin workouts. Login and connection checks do not upload workouts.
+
+Terminal login remains available as a fallback under the same Windows account that runs the app:
+
+```powershell
+.\.venv\Scripts\python.exe python/garmin_bridge.py login
+.\.venv\Scripts\python.exe python/garmin_bridge.py status
+```
+
+Terminal login prompts for your Garmin email if not configured, password and MFA where required. They are sent to Garmin for authentication, not saved by this app. Later commands reuse the session; expired/rejected sessions require signing in again through the app or terminal. The bridge restricts private-directory/file permissions to your user (and SYSTEM on Windows); failure to secure storage stops the operation. Tokens are not encrypted and still need to be protected from malware and other processes running as your user. Avoid shared/cloud-synced storage.
+
+Do not store a Garmin password in `.env`, source code, command-line arguments, or browser settings. Never use a `VITE_` prefix for private settings, because those settings can be included in browser code. `.env` is plain text, not encrypted storage.
+
+`.gitignore` excludes `.env`, `.env.*`, Python virtual environments/cache files, and the legacy `garmin-private/` folder, while allowing the blank `.env.example` template. The bridge requires its session directory outside the repository. Ignore rules do not remove files already tracked in Git; if a credential was previously committed, revoke/rotate it and address the repository history separately.
+
+### Send a reviewed workout
+
+1. Run the local app normally (`npm run dev`, the desktop launcher, or `npm run preview` after building).
+2. In Review, choose **Connect Garmin** if not connected, or **Check Garmin connection** to recheck a saved session. A ready session enables sending.
+3. Check the workout, resolved targets and day, then choose **Send to Garmin & schedule**.
+4. Confirm the title, sport, absolute date and any compatibility warnings. Only this confirmation authorizes the external write.
+5. The bridge uploads, reads back and compares the workout, schedules it, then verifies the calendar entry. Success means **scheduled in Garmin Connect**, not delivered to a watch. Sync Garmin Connect and inspect the workout on your device, especially swimming/custom-power targets.
+
+The local backend accepts only same-origin loopback requests, uses the existing exporter, and invokes a fixed Python script without a shell. Static hosting has no bridge; use downloads there. No automatic background Garmin synchronization or watch-push command is implemented.
+
+### Retries, troubleshooting and logout
+
+Private storage contains `garmin_tokens.json`, a separate `receipts.sqlite` operation journal, and `bridge.lock`. Receipts contain account identity, payload hashes, operation IDs, stages and remote workout IDs—not workout bodies or passwords. Repeated sends of the same exported workout/date to the same account reuse its receipt, including across app reloads. A known upload ID is retained if scheduling or verification fails; retrying verifies/resumes that operation without creating another workout.
+
+If an upload times out before its ID is known, automatic re-upload is blocked. If scheduling has an uncertain outcome, retry only checks the calendar. Inspect Garmin Connect and reconcile manually; do not erase receipts or change the workout merely to bypass this protection. The bridge never automatically deletes or overwrites an existing Garmin workout. Offline/failed integration leaves local save, FIT and JSON downloads available.
+
+If login reports `STORAGE_UNSAFE`, check that the configured directory belongs to your Windows user and is not shared or symlinked. The permission helper updates only file-access rules and does not require changing ownership or Windows audit privileges; do not run the app as Administrator to bypass this check.
+
+Remove only the cached local session with:
+
+```powershell
+.\.venv\Scripts\python.exe python/garmin_bridge.py logout
+```
+
+Logout preserves receipts and unrelated files. It does not revoke credentials copied elsewhere; use Garmin account security settings if tokens were exposed. Changing accounts partitions receipts by Garmin profile ID.
+
+Run credential-free bridge tests with `.\.venv\Scripts\python.exe -m unittest discover -s python/tests -v`, plus `npm test`, `npm run typecheck` and `npm run build`. The first live acceptance test must be explicitly confirmed by the user: send one reviewed workout, verify its calendar entry and manually confirm device sync.
 
 ## GB10 access and SSH key setup (optional)
 
