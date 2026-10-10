@@ -108,6 +108,73 @@ After reviewing a workout, select **Download workout FIT**. The export validates
 
 Garmin Connect currently has a documented wireless path for workouts **already in Connect**: add the workout to its calendar in the phone app, then sync the paired device. This app does not yet create the workout in Connect, and Garmin's course/activity import instructions should not be treated as workout import instructions. USB-free one-click delivery requires a later, separately authorized integration and read-back verification. FIT download remains a local fallback.
 
+## GB10 access and SSH key setup (optional)
+
+**Request a GB10 account and Tailscale access through Ray (the project owner) before attempting to connect.** Installing this app or generating an SSH key does not grant access. Ray must approve access, confirm your assigned username, and arrange public-key installation. Do not assume you can use Ray's `rchia` account.
+
+These instructions are for Windows PowerShell. Never share your private key, passphrase, or account password, and never put them in the repository or app settings.
+
+1. Install/sign in to Tailscale with the access approved by Ray. Confirm that Windows OpenSSH is available:
+
+```powershell
+ssh -V
+```
+
+If it is missing, install **OpenSSH Client** through Windows Optional Features, then reopen PowerShell.
+
+2. Create a dedicated key on your own computer:
+
+```powershell
+New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.ssh" | Out-Null
+ssh-keygen -t ed25519 -a 64 -f "$env:USERPROFILE\.ssh\llm_garmin_gb10"
+```
+
+Choose a strong passphrase. If that key already exists, reuse it rather than accepting an overwrite. The file ending in `.pub` is the public key; the file without `.pub` is the private key and stays on this computer.
+
+3. Send **only the public key** to Ray through the agreed channel:
+
+```powershell
+Get-Content "$env:USERPROFILE\.ssh\llm_garmin_gb10.pub"
+ssh-keygen -lf "$env:USERPROFILE\.ssh\llm_garmin_gb10.pub"
+```
+
+Ray installs the complete `ssh-ed25519 ...` line in your assigned Linux account's `~/.ssh/authorized_keys`, without overwriting other users' keys. The line must have no UTF-8 BOM, wrapping, or leading characters. On GB10, the account must own these files, with permissions `700` for `~/.ssh` and `600` for `authorized_keys`. A stray BOM was a previous cause of password prompts even after the key had been copied.
+
+4. Unlock the key using Windows `ssh-agent`. Once, in **PowerShell opened as Administrator**, run:
+
+```powershell
+Set-Service -Name ssh-agent -StartupType Automatic
+Start-Service ssh-agent
+```
+
+Then return to your **normal PowerShell under the Windows account that runs the app**:
+
+```powershell
+ssh-add "$env:USERPROFILE\.ssh\llm_garmin_gb10"
+ssh-add -l
+```
+
+Enter the key passphrase when asked. The app uses the agent instead of storing a password or passphrase. For background on this setup, see [Microsoft's OpenSSH key-management guide](https://learn.microsoft.com/en-us/windows-server/administration/openssh/openssh_keymanagement).
+
+5. Verify the server identity and test your account. Replace the placeholder with the username Ray assigned:
+
+```powershell
+$gb10User = "YOUR_ASSIGNED_USERNAME"
+ssh -i "$env:USERPROFILE\.ssh\llm_garmin_gb10" -o IdentitiesOnly=yes "$gb10User@100.76.243.123" "whoami"
+```
+
+On the first connection, compare the displayed **server host-key fingerprint** with the fingerprint Ray supplies separately. Accept it only after it matches; this stores it in `known_hosts`. The server fingerprint is different from your public-key fingerprint above. Do not disable host-key checking. If a previously trusted host key changes, ask Ray to verify the change before modifying `known_hosts`.
+
+Next, test the non-interactive mode used by the app:
+
+```powershell
+ssh -T -i "$env:USERPROFILE\.ssh\llm_garmin_gb10" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes "$gb10User@100.76.243.123" "whoami"
+```
+
+It should print your assigned username without a password/passphrase prompt. If it fails, check Tailscale access, the installed public key, agent status, and the verified host key with Ray. Do not repeatedly append the same key to `authorized_keys`.
+
+6. Use the approved GB10 model endpoint in the app. **The current Start default GB10 server button is owner-specific:** it connects to `rchia@100.76.243.123` using `~/.ssh/llm_garmin_gb10`. A separate account does not automatically enable that button; ask Ray to arrange service access/startup. Do not install your key into Ray's account without explicit approval. Remote inference and SSH service control are separate permissions: an authorized model endpoint can be used while its server is already running, without SSH access from the app.
+
 ## Local interpretation (optional)
 
 Start `llama-server.exe` separately. Keep the model path and model selection outside this repository, for example in your own PowerShell command:
