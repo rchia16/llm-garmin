@@ -17,6 +17,72 @@ It currently provides:
 
 It deliberately does not include Garmin account scheduling/sync, TrainingPeaks, or cloud services.
 
+## Create workouts without an LLM
+
+Select **Run**, **Ride**, or **Swim**, then paste one of the examples below into **Describe** and click **Interpret workout**. These recognized formats are parsed locally and require no LLM or GB10 access.
+
+Use the headings `Warm Up:`, `Main Set:`, and `Warm Down:`. Write repeats as `N x (...)`, separating the steps inside parentheses with `+`.
+
+### Run
+
+```text
+Warm Up:
+10 mins in Z2.
+
+Main Set:
+8 x (2 mins in Z5 + 2 min recoveries in Z1).
+
+Warm Down:
+5 mins in Z2.
+```
+
+For an explicit pace range, this format also works:
+
+```text
+1:45:00 @ 06:00-06:40 min/km
+Zone 1-Zone 2
+```
+
+This creates a 105-minute work block. The zone label remains a note; the explicit pace range takes priority.
+
+### Ride
+
+```text
+Warm Up:
+5 mins in Z2.
+
+Main Set:
+3 x (6 mins in Z4 + 3 mins recovery in Z1).
+
+Warm Down:
+5 mins in Z1.
+```
+
+### Swim
+
+```text
+Warm Up:
+1 x (100 FS in Z2 + 100 Pull in Z2 + 10 secs rest).
+
+Main Set:
+4 x (100 FS in Z4 + 20 secs rest),
+4 x (100 Pull in Z3 + 20 secs rest).
+
+Warm Down:
+200 Choice in Z2.
+```
+
+Swimming distances without a unit, such as `100 FS`, are interpreted as metres. Stroke and equipment instructions remain in the block notes.
+
+### Format rules
+
+- Use explicit units for run/ride steps: `mins`, `secs`, `m`, or `km`.
+- Keep repeat groups inside parentheses, including their rest or recovery.
+- Use `Z1`–`Z5` for running/swimming and `Z1`–`Z6` for cycling. Running and swimming also support `Z5a`, `Z5b`, and `Z5c`.
+- Enter running threshold pace, cycling FTP, or swimming CSS to resolve zone-based targets. Parsing itself does not need these values.
+- Free-form wording outside recognized formats may invoke the configured LLM. Without one, use these formats or edit blocks manually.
+- Always review the resulting blocks and targets before exporting.
+
 ## Requirements
 
 - Windows, macOS, or Linux
