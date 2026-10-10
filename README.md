@@ -1,4 +1,11 @@
 # Local Workout Builder
+Had enough of manually creating Garmin workouts and don't want to spend on some
+other software? Have a go at running this instead.
+
+A "good-enough" implementation to convert text to Garmin accepted json files to
+upload to your Garmin Connect account.
+
+## Work thus far
 
 Phase 1's deterministic core and Phase 2's local interpretation boundary are implemented. The Phase 3 browser review UI supports running, cycling, and swimming; Phase 4 FIT and Garmin Connect JSON workout downloads are implemented, with Garmin/device compatibility still needing manual validation.
 
