@@ -133,11 +133,34 @@ The app works immediately for deterministic workout formats. Natural-language in
 
 ## One-click Windows startup
 
-After Node.js has been installed, you can start the app by double-clicking **Start Local Workout Builder.cmd** in the project folder. On the first run it installs the npm dependencies, starts the local server, and opens the app at `http://localhost:5173/`. A server window stays open while the app is running; close that window to stop it.
+After Node.js has been installed, you can start the app by double-clicking **Start Local Workout Builder.cmd** in the project folder. On the first run it installs the npm dependencies, prepares the optional Garmin Python bridge if Python 3.12+ is available, starts the local server, and opens the app at `http://localhost:5173/`. A server window stays open while the app is running; close that window to stop it.
+
+Python setup reuses a compatible `.venv`; otherwise it creates one and installs `python/requirements.txt`. Installed dependencies are checked locally on later launches, without running pip every time. First-time dependency installation needs internet access. Missing Python or failed Garmin setup does not stop the app. Existing incompatible environments are never replaced automatically. Double-click **Setup Garmin Python.cmd** to retry setup separately. Then use **Connect Garmin** inside the app; the launcher never asks for or stores Garmin credentials.
 
 To create a desktop icon, double-click **Create Local Workout Builder Shortcut.cmd** once. It creates **Local Workout Builder.lnk** on your Windows desktop. The shortcut uses the project folder as its working directory, so the repository can be moved only if the shortcut is recreated afterward.
 
 The launcher does not install Node.js, configure the GB10, or start `llama-server`. Install Node.js first, and configure optional local or remote inference separately using [Local interpretation](#local-interpretation).
+
+The launcher also does **not install Python itself**. When a compatible Python cannot be found, setup prints the [official Windows Python download link](https://www.python.org/downloads/windows/) and recommends Python 3.13 (minimum 3.12). Install it manually, reopen your terminal, and rerun the launcher. The link is shown only; no browser or installer opens automatically, and the app can continue without Garmin integration. An incompatible existing `.venv` is preserved and needs attention using the Python setup instructions below.
+
+### Bash startup (Linux/macOS or Git Bash)
+
+From the project folder:
+
+```bash
+bash scripts/start-local-workout-builder.sh
+```
+
+This performs the same npm/optional Python setup and starts the app. Open `http://localhost:5173/` in your browser; press Ctrl+C to stop it. Python 3.12+ must already be installed. Git Bash uses Windows `.venv/Scripts/python.exe`; Linux/macOS use `.venv/bin/python`. Do not share a virtual environment between Windows and WSL/Linux.
+
+Missing or incompatible Python prints the Windows download link in Git Bash, or [Python downloads](https://www.python.org/downloads/) on Linux/macOS. Install Python 3.13 manually, reopen the terminal, and rerun. No automatic browser opening or Python installation occurs; `--check` never installs anything.
+
+To set up only the Python bridge, or check it without installing anything:
+
+```bash
+bash scripts/setup-garmin-python.sh
+bash scripts/setup-garmin-python.sh --check
+```
 
 ## Verify the installation
 

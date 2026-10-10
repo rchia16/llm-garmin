@@ -10,6 +10,13 @@ if errorlevel 1 (
   exit /b 1
 )
 
+node -e "if (Number(process.versions.node.split('.')[0]) < 20) process.exit(1)"
+if errorlevel 1 (
+  echo Node.js 20 or newer is required. Update Node.js and try again.
+  pause
+  exit /b 1
+)
+
 if not exist "node_modules\vite\bin\vite.js" (
   echo First run: installing dependencies...
   call npm install
@@ -18,6 +25,12 @@ if not exist "node_modules\vite\bin\vite.js" (
     pause
     exit /b 1
   )
+)
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0Setup Garmin Python.ps1"
+if errorlevel 1 (
+  echo Starting without the optional Garmin connector. Local saving and exports still work.
+  echo To retry Garmin setup later, double-click Setup Garmin Python.cmd.
 )
 
 echo Starting Local Workout Builder...
