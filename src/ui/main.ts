@@ -51,6 +51,8 @@ import { athleteProfileSchema } from "../domain/index.js";
 const app = document.querySelector<HTMLDivElement>("#app");
 if (app === null) throw new Error("UI mount point was not found.");
 const root = app;
+const sharedMode = (window as Window & { __WORKOUT_BUILDER_SHARED__?: boolean }).__WORKOUT_BUILDER_SHARED__ === true
+  || !["localhost", "127.0.0.1", "[::1]"].includes(window.location.hostname);
 
 const initialWorkout: Workout = {
   ...demoRunningThresholdWorkout,
@@ -113,8 +115,8 @@ let garminStatus = "Optional experimental integration. Connect Garmin or check y
 let modelBusy = false;
 let modelError: string | undefined;
 let interpretationWarnings: string[] = [];
-const defaultGb10Url = "https://promaxgb10-4e2b.tail06a565.ts.net:8443/v1";
-let modelUrl = defaultGb10Url;
+const defaultGb10Url = "https://promaxgb10-4e2b.tail06a565.ts.net:10000/v1";
+let modelUrl = sharedMode ? `${window.location.origin}/api/inference/v1` : defaultGb10Url;
 let gb10Busy = false;
 let gb10Connection: "checking" | "ready" | "loading" | "offline" | "unknown" = "checking";
 let gb10Status = "Checking default GB10 connection…";
@@ -410,9 +412,9 @@ async function refreshGb10Status(): Promise<void> {
   gb10CheckBusy = true;
   let state: typeof gb10Connection = "unknown";
   try {
-    const response = await fetch("/api/local/gb10/status", {
-      method: "POST",
-      headers: { "X-LLM-Garmin-Control": "status" },
+    const response = await fetch(sharedMode ? "/api/shared/health" : "/api/local/gb10/status", {
+      method: sharedMode ? "GET" : "POST",
+      headers: sharedMode ? {} : { "X-LLM-Garmin-Control": "status" },
     });
     if (response.ok) {
       const result = await response.json() as { state?: string };
@@ -465,7 +467,7 @@ function render(): void {
           <textarea id="prompt" rows="5">${escapeHtml(promptText)}</textarea>
           <p class="field-hint">Recognized sectioned workouts are parsed locally; other requests use the model. Target math stays deterministic.</p>
           <div class="control-row"><label class="field-label" for="date-picker-toggle">Workout day</label><div class="date-picker"><button class="date-picker-toggle" id="date-picker-toggle" type="button" aria-haspopup="dialog" aria-expanded="${calendarOpen}"><span>${escapeHtml(displayDate(selectedDate))}</span><span class="calendar-icon" aria-hidden="true">□</span></button>${calendarOpen ? renderCalendar() : ""}</div></div>
-          <div class="model-settings"><div class="backend-label"><span class="pulse"></span><strong>REMOTE INFERENCE BACKEND</strong></div><label class="field-label" for="model-url">GB10 / model endpoint</label><input id="model-url" value="${escapeHtml(modelUrl)}" placeholder="http://gb10-host:8080/v1" /><label class="field-label" for="model-name">Model name <span>(optional)</span></label><input id="model-name" placeholder="Leave blank for server default" value="${escapeHtml(modelName)}" /><label class="field-label" for="model-api-key">API key <span>(optional, session only)</span></label><input id="model-api-key" type="password" autocomplete="off" placeholder="Not saved to disk" value="${escapeHtml(modelApiKey)}" />${gb10Connection === "offline" && !gb10Busy ? `<button class="gb10-start" id="gb10-start" type="button">Start default GB10 server</button><p class="field-hint">Uses your local SSH key to start the existing GB10 user service and Tailscale Serve.</p>` : ""}<p class="gb10-status" role="status">${escapeHtml(gb10Status)}</p>${gb10Error.length > 0 ? `<p class="gb10-status" role="alert">${escapeHtml(gb10Error)}</p>` : ""}</div>
+          ${sharedMode ? `<div class="model-settings"><strong>GB10 workout interpretation</strong><p class="field-hint">Natural-language requests are processed on GB10. Your saved profile and workouts stay in this browser. Do not include passwords or account details in workout requests.</p><p class="gb10-status" role="status">${escapeHtml(gb10Status)}</p></div>` : `<div class="model-settings"><div class="backend-label"><span class="pulse"></span><strong>REMOTE INFERENCE BACKEND</strong></div><label class="field-label" for="model-url">GB10 / model endpoint</label><input id="model-url" value="${escapeHtml(modelUrl)}" placeholder="http://gb10-host:8080/v1" /><label class="field-label" for="model-name">Model name <span>(optional)</span></label><input id="model-name" placeholder="Leave blank for server default" value="${escapeHtml(modelName)}" /><label class="field-label" for="model-api-key">API key <span>(optional, session only)</span></label><input id="model-api-key" type="password" autocomplete="off" placeholder="Not saved to disk" value="${escapeHtml(modelApiKey)}" />${gb10Connection === "offline" && !gb10Busy ? `<button class="gb10-start" id="gb10-start" type="button">Start default GB10 server</button><p class="field-hint">Uses your local SSH key to start the existing GB10 user service and Tailscale Serve.</p>` : ""}<p class="gb10-status" role="status">${escapeHtml(gb10Status)}</p>${gb10Error.length > 0 ? `<p class="gb10-status" role="alert">${escapeHtml(gb10Error)}</p>` : ""}</div>`}
           <button class="primary-button" id="review-button" type="button" ${modelBusy ? "disabled" : ""}><span>${modelBusy ? "Interpreting…" : "Interpret workout"}</span><b>↗</b></button>
           ${modelError === undefined ? "" : `<div class="model-error" role="alert"><strong>Interpretation failed</strong><span>${escapeHtml(modelError)}</span><small>The existing Review workout was left unchanged.</small></div>`}
         </section>
@@ -494,10 +496,10 @@ function render(): void {
           <button class="save-button" id="save-button" type="button"><span>Save locally</span><b>↓</b></button>
           <button class="save-button" id="fit-export-button" type="button"><span>Download workout FIT</span><b>↓</b></button>
           <button class="save-button" id="garmin-json-export-button" type="button"><span>Download Garmin Connect JSON</span><b>↓</b></button>
-          <button class="save-button" id="garmin-check-button" type="button" ${garminBusy ? "disabled" : ""}><span>Check Garmin connection</span></button>
+          ${sharedMode ? `<p class="save-note">Shared mode: download your workout to use with your own Garmin account. Account connections are available in the local app.</p>` : `<button class="save-button" id="garmin-check-button" type="button" ${garminBusy ? "disabled" : ""}><span>Check Garmin connection</span></button>
           <button class="save-button" id="garmin-login-button" type="button" ${garminBusy ? "disabled" : ""}><span>${garminReady ? "Disconnect Garmin" : "Connect Garmin"}</span></button>
           <button class="save-button" id="garmin-send-button" type="button" ${garminBusy || !garminReady ? "disabled" : ""}><span>${garminBusy ? "Contacting Garmin…" : "Send to Garmin & schedule"}</span></button>
-          <p class="save-note" role="status"><strong>Experimental Garmin integration</strong><br />${escapeHtml(garminStatus)}</p>
+          <p class="save-note" role="status"><strong>Experimental Garmin integration</strong><br />${escapeHtml(garminStatus)}</p>`}
           <p class="save-note">Neither download schedules or syncs to Garmin. Import JSON with a compatible third-party Garmin Connect browser extension, then inspect the steps before scheduling. Saved workouts stay in this browser; SQLite remains available to the local Node engine.</p>
           ${jsonExportWarnings.length === 0 ? "" : `<div class="model-error" role="status"><strong>Check after JSON import</strong><ul>${jsonExportWarnings.map((warning) => `<li>${escapeHtml(warning)}</li>`).join("")}</ul></div>`}
         </aside>
@@ -963,7 +965,7 @@ function render(): void {
 }
 
 render();
-void requestGarmin("status").then((result) => {
+if (!sharedMode) void requestGarmin("status").then((result) => {
   garminReady = result.ok && result.code === "READY";
   garminStatus = garminResultMessage(result);
   render();

@@ -6,9 +6,12 @@
 
 # Dependencies
 node_modules/
+.npm-cache/
+.deployment/
 
 # Build output and coverage
 dist/
+dist-ui/
 coverage/
 
 # Local databases and runtime data

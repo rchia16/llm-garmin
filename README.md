@@ -280,6 +280,85 @@ Logout preserves receipts and unrelated files. It does not revoke credentials co
 
 Run credential-free bridge tests with `.\.venv\Scripts\python.exe -m unittest discover -s python/tests -v`, plus `npm test`, `npm run typecheck` and `npm run build`. The first live acceptance test must be explicitly confirmed by the user: send one reviewed workout, verify its calendar entry and manually confirm device sync.
 
+## Share the workout builder from GB10
+
+The shared server is separate from the local Vite server. It serves the production UI and a bounded, same-origin inference proxy. Visitors can describe, review, edit, save in their browser, and download FIT/JSON. Profiles and saved workouts are not stored in a shared server database. Natural-language prompts and the profile context needed for interpretation are sent to the GB10 model; deterministic formats are interpreted in the browser. The app does not log prompts or profiles; separately check any inference gateway logging.
+
+**Shared mode cannot connect to Garmin accounts or schedule through the host's account.** Its server does not load the Garmin bridge, SSH controls, SQLite store, or repository `.env`. Those endpoints return 404, even when a visitor supplies local-control headers. Direct Garmin scheduling remains available when running the local app. Per-visitor Garmin login/session isolation is not implemented; do not expose the local Vite server or Python bridge through Funnel.
+
+Tailscale Funnel makes a service reachable from the public internet. Possession of the URL is not authentication, and tailnet access rules do not authenticate public Funnel visitors. This deployment deliberately offers public workout creation/downloads with no account access. If access must be restricted to invited people, use private Tailscale Serve/node sharing, or add authentication before publishing. See [Tailscale Funnel](https://tailscale.com/docs/features/tailscale-funnel).
+
+### Build and run on GB10
+
+Copy a clean checkout of this repository to `~/llm-garmin` on GB10. Do not copy your Windows `.env`, `.venv`, databases, Garmin sessions, SSH keys, or `node_modules`. Prefer a dedicated Linux service account with no Garmin or SSH credentials. Install a supported Node.js LTS with npm on GB10; do not copy native dependencies from Windows to Linux/ARM64.
+
+Run in the GB10 terminal:
+
+```bash
+cd ~/llm-garmin
+npm ci
+npm test
+npm run typecheck
+npm run build
+PUBLIC_ORIGIN=https://promaxgb10-4e2b.tail06a565.ts.net:8443 \
+INFERENCE_URL=http://127.0.0.1:8081/v1 \
+PORT=4173 npm run start:shared
+```
+
+`INFERENCE_URL` must be a loopback HTTP `/v1` endpoint. The default uses port 8081 from the existing GB10 setup; verify that this is the model/gateway's actual local port. Model health is probed at `/health` on the same port. The externally supplied `/v1/health` URL is not evidence of which local port/path serves health. If your gateway differs, use its loopback completion port or adjust the health routing first. Inference is optional: exports and recognized workout formats work when it is unavailable.
+
+`PUBLIC_ORIGIN` is required, includes the public HTTPS port, and must have no trailing slash. The server binds only to `127.0.0.1`; Tailscale handles HTTPS. It accepts the configured Host and, for inference POSTs, the matching Origin. No forwarded identity headers are trusted. Verify that your proxy preserves the original Host; do not remove these checks to fix a proxy configuration.
+
+Optional `INFERENCE_API_KEY` is a server environment variable. It is never returned to visitors or read from a `VITE_` variable. Use a private service environment file outside the repository if needed; do not include keys in URLs or browser settings. Shared mode hides model endpoint/key settings and host controls. The local app retains its existing settings.
+
+### Start it as a user service
+
+The supplied [service template](deploy/workout-builder.service) expects `~/llm-garmin` and `/usr/bin/node`. Check `command -v node` and edit `ExecStart` if needed; systemd does not load interactive shell/NVM configuration. The service has a different name from the existing `llm-garmin.service` model service.
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp deploy/workout-builder.service ~/.config/systemd/user/workout-builder.service
+systemctl --user daemon-reload
+systemctl --user enable --now workout-builder.service
+systemctl --user status workout-builder.service
+```
+
+An administrator may need to enable lingering for the dedicated account so its user service survives logout. The model service must also be running. Diagnostic logs are available with `journalctl --user -u workout-builder.service -n 50 --no-pager`.
+
+### Point Funnel at the app
+
+First inspect your existing routes to avoid replacing the model endpoint unintentionally:
+
+```bash
+tailscale serve status
+tailscale funnel status
+curl -i -H 'Host: promaxgb10-4e2b.tail06a565.ts.net:8443' http://127.0.0.1:4173/
+```
+
+Once the app is running and verified, make port 8443 serve it:
+
+```bash
+tailscale funnel --bg --https=8443 http://127.0.0.1:4173
+```
+
+This deliberately replaces the existing root handler on HTTPS port 8443. The shared browser uses `/api/inference/v1`, not the former `:8443/v1` model URL. Keep local clients on a separate, tailnet-only model route:
+
+```bash
+tailscale serve --bg --https=10000 http://127.0.0.1:8081
+```
+
+The local app now defaults to `:10000/v1`; its Start GB10 control also uses port 10000 so it cannot overwrite the shared app. Do not enable Funnel for this raw model port. Do not reset all Tailscale routes: your existing port 443 setup may serve other services. This app's limits do not protect any separate gateway on port 443.
+
+Open `https://promaxgb10-4e2b.tail06a565.ts.net:8443/` from a browser outside your tailnet. Check workout editing and FIT/JSON downloads, verify that Garmin login and host-start buttons are absent, and verify that `/.env` and `/api/local/garmin/status` return 404. `/api/shared/health` should return only a model readiness state. Check two separate browser profiles to confirm saved athlete baselines stay separate. People sharing one browser profile share its local data; changing from localhost to this HTTPS origin does not migrate previous browser storage.
+
+The public server allows only the built index, flat JS/CSS assets and its three explicit routes. It applies a same-origin content policy, rejects oversized/invalid inference requests, strips model response metadata, limits generation to 8192 output tokens and 90 seconds, permits two active requests and 30 requests per minute across all visitors. These bounds protect capacity but are not authentication; public visitors can consume that allowance. External Google Fonts are blocked by the shared content policy, so system fonts are used. There are no public login, account-management or shared history features.
+
+The deployed GB10 runtime contains only `dist/shared`, `dist-ui`, a minimal package manifest with pinned Zod, and the service template. It contains no Garmin/Python bridge, SQLite data, source tree, or copied local configuration. Node runtime permissions allow reads only of those runtime files and dependencies, deny file writes and child processes, and do not replace OS account isolation. The user service runs under `rchia`; a dedicated OS account would provide stronger separation. GB10 disables unprivileged user namespaces, so this template omits namespace-dependent systemd protections. See [Node permissions](https://nodejs.org/docs/latest-v22.x/api/permissions.html).
+
+Live Qwen3-4B testing returned schema-valid JSON but omitted a requested date and misread warm-up duration and threshold intensity. Always inspect the absolute date, durations and targets before export. Recognized sectioned formats remain deterministic and do not use the model. Model quality improvement is separate from hosting and account protection.
+
+Verify the GB10 service, Funnel routing, browser rendering and local inference after each deployment. `/api/shared/health` reports readiness; it does not certify interpretation accuracy.
+
 ## GB10 access and SSH key setup (optional)
 
 **Request a GB10 account and Tailscale access through Ray (the project owner) before attempting to connect.** Installing this app or generating an SSH key does not grant access. Ray must approve access, confirm your assigned username, and arrange public-key installation. Do not assume you can use Ray's `rchia` account.
@@ -363,11 +442,11 @@ Then run the UI:
 npm run dev
 ```
 
-The **GB10 / model endpoint** defaults to `https://promaxgb10-4e2b.tail06a565.ts.net:8443/v1` through Tailscale Serve and remains editable. Leave **Model name** blank to use whichever model the server loaded. If your server or GB10 gateway requires a model name, enter it there. Enter an API key only if the endpoint requires one; it is held in memory for the current browser session and is not saved to disk. A remote deployment only changes the endpoint field; the parser does not know or care where the model is loaded.
+The **GB10 / model endpoint** defaults to `https://promaxgb10-4e2b.tail06a565.ts.net:10000/v1` through Tailscale Serve and remains editable. Leave **Model name** blank to use whichever model the server loaded. If your server or GB10 gateway requires a model name, enter it there. Enter an API key only if the endpoint requires one; it is held in memory for the current browser session and is not saved to disk. A remote deployment only changes the endpoint field; the parser does not know or care where the model is loaded.
 
 The **Start default GB10 server** button works when the UI is served by the local Vite development or preview server (`npm run dev` or `npm run preview`, bound to `127.0.0.1`). The app checks the default GB10 llama-server `/health` endpoint on load and periodically thereafter; the button is offered only when that endpoint is unreachable or its gateway reports an unavailable upstream. A responding server hides the button, including while the model is still loading. If status cannot be verified, the button stays hidden rather than claiming the server is disconnected. This status check does not change the editable model endpoint field. The health codes follow [llama.cpp's server health contract](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md#api-endpoints).
 
-When clicked, the button uses non-interactive OpenSSH with `~/.ssh/llm_garmin_gb10`, strict host-key checking, and the fixed target `rchia@100.76.243.123`. On GB10 it runs `systemctl --user daemon-reload`, `systemctl --user enable --now llm-garmin.service`, then `tailscale serve --bg --https=8443 localhost:8081`. The button selects the default model endpoint after SSH succeeds. It does not create or edit the remote service or its Apptainer launch script; those must already be installed with the desired `Qwen/Qwen3-4B-GGUF:Q4_K_M` configuration. SSH success means startup was requested, not that the model has finished loading. Use `ssh -i "$env:USERPROFILE\.ssh\llm_garmin_gb10" rchia@100.76.243.123 "journalctl --user -u llm-garmin.service -n 50 --no-pager"` to diagnose remote startup. A passphrase-protected key must be unlocked in `ssh-agent` first; the app never prompts for or stores SSH passwords. Static hosting without the local Vite server does not provide this control endpoint.
+When clicked, the button uses non-interactive OpenSSH with `~/.ssh/llm_garmin_gb10`, strict host-key checking, and the fixed target `rchia@100.76.243.123`. On GB10 it runs `systemctl --user daemon-reload`, `systemctl --user enable --now llm-garmin.service`, then `tailscale serve --bg --https=10000 localhost:8081`. The button selects the default model endpoint after SSH succeeds. It does not create or edit the remote service or its Apptainer launch script; those must already be installed with the desired `Qwen/Qwen3-4B-GGUF:Q4_K_M` configuration. SSH success means startup was requested, not that the model has finished loading. Use `ssh -i "$env:USERPROFILE\.ssh\llm_garmin_gb10" rchia@100.76.243.123 "journalctl --user -u llm-garmin.service -n 50 --no-pager"` to diagnose remote startup. A passphrase-protected key must be unlocked in `ssh-agent` first; the app never prompts for or stores SSH passwords. Static hosting without the local Vite server does not provide this control endpoint.
 
 The model returns semantic JSON such as repeats, durations, threshold, FTP, CSS offsets, named zones, and explicit targets. Zod validates that response, then the existing deterministic engine resolves numeric pace, power, and swim targets. The model never performs those calculations.
 

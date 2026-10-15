@@ -11,7 +11,7 @@ describe("local GB10 control", () => {
     expect(command?.args).toContain("BatchMode=yes");
     expect(command?.args).toContain("StrictHostKeyChecking=yes");
     expect(command?.args).toContain("rchia@100.76.243.123");
-    expect(command?.args.at(-1)).toBe("systemctl --user daemon-reload && systemctl --user enable --now llm-garmin.service && tailscale serve --bg --https=8443 localhost:8081");
+    expect(command?.args.at(-1)).toBe("systemctl --user daemon-reload && systemctl --user enable --now llm-garmin.service && tailscale serve --bg --https=10000 localhost:8081");
     await expect(startGb10Server(async () => { throw new Error("should not run"); }, () => false)).rejects.toThrow("SSH_KEY_MISSING");
   });
 
@@ -47,7 +47,7 @@ describe("local GB10 control", () => {
     const expected = ["ready", "loading", "offline", "offline", "unknown"];
     for (const [index, status] of statuses.entries()) {
       const state = await probeGb10Health(async (url) => {
-        expect(url).toBe("https://promaxgb10-4e2b.tail06a565.ts.net:8443/health");
+        expect(url).toBe("https://promaxgb10-4e2b.tail06a565.ts.net:10000/health");
         return new Response("", { status });
       });
       expect(state).toBe(expected[index]);

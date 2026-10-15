@@ -8,8 +8,8 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 const execFileAsync = promisify(execFile);
 const remote = "rchia@100.76.243.123";
 const keyPath = join(homedir(), ".ssh", "llm_garmin_gb10");
-const startCommand = "systemctl --user daemon-reload && systemctl --user enable --now llm-garmin.service && tailscale serve --bg --https=8443 localhost:8081";
-const healthUrl = "https://promaxgb10-4e2b.tail06a565.ts.net:8443/health";
+const startCommand = "systemctl --user daemon-reload && systemctl --user enable --now llm-garmin.service && tailscale serve --bg --https=10000 localhost:8081";
+const healthUrl = "https://promaxgb10-4e2b.tail06a565.ts.net:10000/health";
 
 export type Gb10Health = "ready" | "loading" | "offline" | "unknown";
 
