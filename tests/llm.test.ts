@@ -569,6 +569,58 @@ Warm Down:
     expect(result.workout.steps.at(-1)).toMatchObject({ type: "cooldown", notes: "Choice" });
   });
 
+  it("parses a sectioned swim with a multi-line repeated set and back/breast strokes deterministically", async () => {
+    let calls = 0;
+    const result = await parseWorkout({
+      provider: { generateStructured: async () => {
+        calls += 1;
+        throw new Error("The model should not be called for this structured swim.");
+      } },
+      profile: completeProfile,
+      selectedSport: "swimming",
+      sourcePrompt: `Warm Up:
+1 x (100 FS in Z2 + 100 FS in Z4 + 20 secs rest),
+1 x (50 FS in Z2 + 150 FS in Z4 + 20 secs rest),
+1 x (200 FS in Z4 + 30 secs rest).
+
+Main Set: Repeat 3 sets of 500 as below:
+1 x (100 FS in Z2 + 10 secs rest),
+1 x (100 FS in Z3 + 10 secs rest),
+1 x (100 FS in Z4 + 10 secs rest),
+1 x (100 FS in Z5 + 10 secs rest),
+1 x (100 Pull in Z2 + 10 secs rest).
+
+Warm Down:
+1 x (100 Kick in Z2 + 100 FS in Z2 + 15 secs rest),
+1 x (50 Back in Z2 + 50 Breast in Z2 + 10 secs rest),
+1 x (200 Choice in Z2).`,
+      referenceDate: "2026-10-10",
+      timeZone: "Australia/Sydney",
+    });
+
+    expect(calls).toBe(0);
+    expect(result.interpretationWarnings).not.toEqual(expect.arrayContaining([expect.stringContaining("Repeat groups differ")]));
+    expect(result.workout.steps).toHaveLength(16);
+    expect(result.workout.steps[8]).toMatchObject({
+      type: "repeat",
+      repetitions: 3,
+      steps: [
+        { type: "work", duration: { kind: "distance", metres: 100 }, notes: "FS" },
+        { type: "rest", duration: { kind: "time", seconds: 10 } },
+        { type: "work", duration: { kind: "distance", metres: 100 }, notes: "FS" },
+        { type: "rest", duration: { kind: "time", seconds: 10 } },
+        { type: "work", duration: { kind: "distance", metres: 100 }, notes: "FS" },
+        { type: "rest", duration: { kind: "time", seconds: 10 } },
+        { type: "work", duration: { kind: "distance", metres: 100 }, notes: "FS" },
+        { type: "rest", duration: { kind: "time", seconds: 10 } },
+        { type: "work", duration: { kind: "distance", metres: 100 }, notes: "Pull" },
+        { type: "rest", duration: { kind: "time", seconds: 10 } },
+      ],
+    });
+    expect(result.workout.steps[12]).toMatchObject({ type: "cooldown", duration: { metres: 50 }, notes: "Back" });
+    expect(result.workout.steps[13]).toMatchObject({ type: "cooldown", duration: { metres: 50 }, notes: "Breast" });
+  });
+
   it("preserves the sectioned swim test day, resolves effort zones, and leaves time trials open without a model call", async () => {
     let calls = 0;
     const result = await parseWorkout({

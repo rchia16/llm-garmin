@@ -81,10 +81,23 @@ Warm Down:
 
 Swimming distances without a unit, such as `100 FS`, are interpreted as metres. Stroke and equipment instructions remain in the block notes.
 
+A multi-line swim set can be written with an outer repeat count and per-set distance. Put the heading and repeat instruction together, then list the steps in the set:
+
+```text
+Main Set: Repeat 3 sets of 500 as below:
+1 x (100 FS in Z2 + 10 secs rest),
+1 x (100 Pull in Z2 + 10 secs rest),
+1 x (100 Back in Z2 + 10 secs rest),
+1 x (100 Breast in Z2 + 10 secs rest),
+1 x (100 FS in Z4 + 10 secs rest).
+```
+
+The steps are grouped into one three-repetition set. The listed swim distances must add up to 500 m per set; rests do not count toward that distance.
+
 ### Format rules
 
 - Use explicit units for run/ride steps: `mins`, `secs`, `m`, or `km`.
-- Keep repeat groups inside parentheses, including their rest or recovery.
+- Keep inline repeat groups inside parentheses, including their rest or recovery. Multi-line swim sets may use `Main Set: Repeat N sets of DISTANCE as below:` followed by the set steps; their swim distances must add up to the stated distance.
 - Use `Z1`–`Z5` for running/swimming and `Z1`–`Z6` for cycling. Running and swimming also support `Z5a`, `Z5b`, and `Z5c`.
 - Enter running threshold pace, cycling FTP, or swimming CSS to resolve zone-based targets. Parsing itself does not need these values.
 - Free-form wording outside recognized formats may invoke the configured LLM. Without one, use these formats or edit blocks manually.

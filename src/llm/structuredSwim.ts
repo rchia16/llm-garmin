@@ -54,6 +54,21 @@ export function parseStructuredSwim(sourcePrompt: string): ParsedWorkout | undef
   let usedUnwrappedStep = false;
   let id = 0;
   const steps: ParsedStep[] = [];
+  let repeatedSet: { repetitions: number; expectedMetres: number; steps: ParsedStep[] } | undefined;
+
+  const distanceMetres = (items: ParsedStep[]): number => items.reduce((sum, step) => {
+    if (step.type === "repeat") return sum + step.repetitions * distanceMetres(step.steps);
+    return sum + (step.duration.kind === "distance" ? step.duration.metres : 0);
+  }, 0);
+
+  const finishRepeatedSet = (): boolean => {
+    if (repeatedSet === undefined) return true;
+    if (distanceMetres(repeatedSet.steps) !== repeatedSet.expectedMetres) return false;
+    id += 1;
+    steps.push({ id: `swim-${id}`, type: "repeat", repetitions: repeatedSet.repetitions, steps: repeatedSet.steps });
+    repeatedSet = undefined;
+    return true;
+  };
 
   const parseMovement = (text: string): ParsedStep | undefined => {
     const rest = /^(\d+(?:\.\d+)?)\s*(seconds?|secs?|s|minutes?|mins?|min)\s+rests?$/i.exec(text);
@@ -73,7 +88,7 @@ export function parseStructuredSwim(sourcePrompt: string): ParsedWorkout | undef
     }
 
     if (section === undefined) return undefined;
-    const movement = /^(\d+(?:\.\d+)?)\s*(?:m\b\s*)?(?:(FS|freestyle|free|pull|drill|kick|choice)\b\s*)?(.*)$/i.exec(text);
+    const movement = /^(\d+(?:\.\d+)?)\s*(?:m\b\s*)?(?:(FS|freestyle|free|pull|drill|kick|choice|back|backstroke|breast|breaststroke)\b\s*)?(.*)$/i.exec(text);
     if (movement === null) return undefined;
     const metres = Number(movement[1]);
     if (metres <= 0) return undefined;
@@ -117,19 +132,31 @@ export function parseStructuredSwim(sourcePrompt: string): ParsedWorkout | undef
   };
 
   for (const line of lines) {
-    const heading = /^([^:]+):$/.exec(line);
-    if (heading !== null) {
-      const key = heading[1]?.toLowerCase().replace(/\s+/g, " ").trim() ?? "";
-      section = headingSection[key];
-      if (section === undefined) return undefined;
+    let contentLine = line;
+    const heading = /^([^:]+):(?:\s*(.*))?$/.exec(line);
+    const headingKey = heading?.[1]?.toLowerCase().replace(/\s+/g, " ").trim() ?? "";
+    if (heading !== null && Object.hasOwn(headingSection, headingKey)) {
+      if (!finishRepeatedSet()) return undefined;
+      section = headingSection[headingKey];
       sawHeading = true;
-      if (key === "test") sawTest = true;
-      continue;
+      if (headingKey === "test") sawTest = true;
+      contentLine = heading[2]?.trim() ?? "";
+      if (contentLine.length === 0) continue;
     }
     if (section === undefined) return undefined;
 
+    const setRepeat = /^Repeat\s+(\d+)\s+sets?\s+of\s+(\d+(?:\.\d+)?)\s*(?:m(?:et(?:er|re)s?)?\s*)?as\s+below:?$/i.exec(contentLine);
+    if (setRepeat !== null) {
+      if (repeatedSet !== undefined || section !== "work") return undefined;
+      const repetitions = Number(setRepeat[1]);
+      const expectedMetres = Number(setRepeat[2]);
+      if (!Number.isSafeInteger(repetitions) || repetitions < 2 || !Number.isFinite(expectedMetres) || expectedMetres <= 0) return undefined;
+      repeatedSet = { repetitions, expectedMetres, steps: [] };
+      continue;
+    }
+
     // These two comma clauses annotate a movement; other commas separate steps.
-    const content = line.replace(/[.,;]\s*$/, "")
+    const content = contentLine.replace(/[.,;]\s*$/, "")
       .replace(/,\s*RECORD TIME\b/gi, " RECORD TIME")
       .replace(/\b(Choice),\s*(Steady)\b/gi, "$1 $2");
     const groups = splitOutsideParens(content, ",");
@@ -142,14 +169,17 @@ export function parseStructuredSwim(sourcePrompt: string): ParsedWorkout | undef
       if (!Number.isSafeInteger(repetitions) || repetitions < 1) return undefined;
       const children = parseComponents(parenthesized?.[2] ?? simple?.[2] ?? group);
       if (children === undefined) return undefined;
+      let parsedSteps: ParsedStep[];
       if (repetitions === 1) {
-        steps.push(...children);
+        parsedSteps = children;
       } else {
         id += 1;
-        steps.push({ id: `swim-${id}`, type: "repeat", repetitions, steps: children });
+        parsedSteps = [{ id: `swim-${id}`, type: "repeat", repetitions, steps: children }];
       }
+      (repeatedSet?.steps ?? steps).push(...parsedSteps);
     }
   }
+  if (!finishRepeatedSet()) return undefined;
 
   // Keep the original strict route for ordinary sectioned swims; the wider
   // unwrapped-step grammar is only enabled by an explicit TEST section.

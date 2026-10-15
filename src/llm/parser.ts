@@ -127,10 +127,12 @@ function assertAtomicWorkoutSteps(steps: ParsedStep[]): void {
 }
 
 function explicitRepeatCounts(sourcePrompt: string): number[] {
-  return [...sourcePrompt.matchAll(/\b([1-9]\d*)\s*(?:x|\u00d7)(?=\s|\()/gi)]
+  const inlineCounts = [...sourcePrompt.matchAll(/\b([1-9]\d*)\s*(?:x|\u00d7)(?=\s|\()/gi)]
     .map((match) => Number(match[1]))
-    .filter((repetitions) => repetitions > 1)
-    .sort((left, right) => left - right);
+    .filter((repetitions) => repetitions > 1);
+  const setCounts = [...sourcePrompt.matchAll(/\brepeat\s+([2-9]\d*)\s+sets?\s+of\s+\d+(?:\.\d+)?\s*(?:m(?:et(?:er|re)s?)?\s*)?as\s+below\b/gi)]
+    .map((match) => Number(match[1]));
+  return [...inlineCounts, ...setCounts].sort((left, right) => left - right);
 }
 
 function parsedRepeatCounts(steps: ParsedStep[]): number[] {
