@@ -4,6 +4,8 @@
 *.swo
 .sw?
 
+*.tar.gz
+
 # Dependencies
 node_modules/
 .npm-cache/
