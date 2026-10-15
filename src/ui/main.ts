@@ -1,4 +1,7 @@
 import "./styles.css";
+import { accountFetch, accountGateNeeded, getHostedSession, hostedEpoch, hostedRequest, isHosted, renderAccountGate, requestPasswordChange, restoreHostedSession, signOut, userStorageKey } from "./hostedClient.js";
+import type { Versioned } from "../shared/accounts.js";
+import { z } from "zod";
 import { garminConfirmation, garminOperationId, requestGarmin } from "./garminClient.js";
 import { garminResultMessage } from "../local/garminProtocol.js";
 import { showGarminLogin } from "./garminLogin.js";
@@ -26,6 +29,8 @@ import {
   createWorkoutStep,
   defaultDurationForKind,
   editableTimeDuration,
+  editableDistanceDuration,
+  parseDistanceMetres,
   deleteWorkoutStep,
   findStepContext,
   moveWorkoutStep,
@@ -38,6 +43,7 @@ import {
   wrapWorkoutSteps,
   zoneChoices,
   type StepKind,
+  type DistanceUnit,
 } from "./workoutEditor.js";
 import type {
   AthleteProfile,
@@ -46,13 +52,12 @@ import type {
   Workout,
   WorkoutStep,
 } from "../domain/index.js";
-import { athleteProfileSchema } from "../domain/index.js";
+import { athleteProfileSchema, workoutSchema } from "../domain/index.js";
 
 const app = document.querySelector<HTMLDivElement>("#app");
 if (app === null) throw new Error("UI mount point was not found.");
 const root = app;
-const sharedMode = (window as Window & { __WORKOUT_BUILDER_SHARED__?: boolean }).__WORKOUT_BUILDER_SHARED__ === true
-  || !["localhost", "127.0.0.1", "[::1]"].includes(window.location.hostname);
+const sharedMode = isHosted();
 
 const initialWorkout: Workout = {
   ...demoRunningThresholdWorkout,
@@ -72,6 +77,7 @@ const initialWorkout: Workout = {
 const profileStorageKey = "local-workout-builder:athlete-profile";
 
 function loadStoredProfile(): AthleteProfile {
+  if (sharedMode) return athleteProfileSchema.parse({ id: "unsigned", running: { paceZoneSystem: "friel_trainingpeaks" }, cycling: { powerZoneSystem: "coggan" }, swimming: { thresholdMethod: "css" } });
   try {
     const stored = localStorage.getItem(profileStorageKey);
     if (stored !== null) return athleteProfileSchema.parse(JSON.parse(stored));
@@ -99,6 +105,24 @@ function loadStoredProfile(): AthleteProfile {
 
 function persistProfile(next: AthleteProfile): void {
   profile = next;
+  if (sharedMode) {
+    const before = hostedEpoch();
+    localStorage.setItem(userStorageKey("profile-draft"), JSON.stringify(next));
+    profileSave = profileSave.then(async () => {
+      if (before !== hostedEpoch()) return;
+      if (profileConflict) throw new Error("Reload your profile before saving more baseline changes. Your draft is kept.");
+      const result = await hostedRequest<unknown>("/api/profile", "PUT", { revision: profileRevision, data: next });
+      if (before !== hostedEpoch()) return;
+      profileRevision = profileEnvelope.parse(result).revision;
+      if (localStorage.getItem(userStorageKey("profile-draft")) === JSON.stringify(next)) localStorage.removeItem(userStorageKey("profile-draft"));
+    }).catch(error => {
+      if (before !== hostedEpoch()) return;
+      profileConflict = true;
+      notice = error instanceof Error ? error.message : "Profile save failed. Your draft is kept.";
+      render();
+    });
+    return;
+  }
   localStorage.setItem(profileStorageKey, JSON.stringify(next));
 }
 
@@ -127,17 +151,150 @@ let modelName = "";
 let modelApiKey = "";
 let draggedStepId: string | undefined;
 let selectedStepIds = new Set<string>();
+const distanceUnits = new Map<string, DistanceUnit>();
 let stepIdSequence = 0;
+const profileEnvelope = z.object({ revision: z.number().int().positive(), data: athleteProfileSchema });
+const workoutEnvelope = z.object({ revision: z.number().int().positive(), data: workoutSchema });
+let profileRevision = 1;
+let workoutRevision: number | undefined;
+let profileConflict = false;
+let profileSave: Promise<void> = Promise.resolve();
+let savedWorkouts: Versioned<Workout>[] = [];
+let hostedLoading = sharedMode;
 let theme: "light" | "dark" = localStorage.getItem("local-workout-builder:theme") === "dark"
   || (localStorage.getItem("local-workout-builder:theme") === null && matchMedia("(prefers-color-scheme: dark)").matches)
   ? "dark"
   : "light";
 localStorage.removeItem("local-workout-builder:swim-test-prompt");
-let promptText = localStorage.getItem("local-workout-builder:last-prompt") ?? "Tomorrow do 5 x 1 km at threshold with 90 sec easy recovery, 10 min warm-up and cooldown.";
+let promptText = (sharedMode ? null : localStorage.getItem("local-workout-builder:last-prompt")) ?? "Tomorrow do 5 x 1 km at threshold with 90 sec easy recovery, 10 min warm-up and cooldown.";
+
+async function loadHostedState(): Promise<void> {
+  if (accountGateNeeded()) { hostedLoading = false; render(); return; }
+  hostedLoading = true; render();
+  const before = hostedEpoch();
+  try {
+    const [storedProfile, storedWorkouts] = await Promise.all([
+      hostedRequest<unknown>("/api/profile"), hostedRequest<unknown>("/api/workouts"),
+    ]);
+    if (before !== hostedEpoch()) return;
+    const loaded = profileEnvelope.parse(storedProfile);
+    profile = loaded.data; profileRevision = loaded.revision; profileConflict = false;
+    savedWorkouts = z.array(workoutEnvelope).parse(storedWorkouts);
+    workout = recalculateWorkout(initialWorkout, profile); workoutRevision = undefined;
+    const draft = localStorage.getItem(userStorageKey("draft"));
+    if (draft) {
+      try {
+        const parsed = z.object({ workout: workoutSchema, revision: z.number().int().positive().optional() }).safeParse(JSON.parse(draft));
+        if (parsed.success) { workout = recalculateWorkout(parsed.data.workout, profile); workoutRevision = parsed.data.revision; }
+      } catch { /* Invalid browser drafts cannot prevent loading validated server data. */ }
+    }
+    selectedDate = workout.scheduledDate ?? new Date().toISOString().slice(0, 10);
+    promptText = localStorage.getItem(userStorageKey("prompt")) ?? "";
+    distanceUnits.clear(); selectedStepIds.clear();
+    hostedLoading = false; notice = "Profile and saved workouts loaded"; render();
+    const result = await requestGarmin("status");
+    if (before !== hostedEpoch()) return;
+    garminReady = result.ok; garminStatus = garminResultMessage(result); render();
+  } catch (error) {
+    if (before !== hostedEpoch()) return;
+    hostedLoading = false;
+    root.innerHTML = '<main class="account-panel"><h1>Could not load your account</h1><p role="alert"></p><button data-retry>Retry</button><button data-signout>Sign out</button></main>';
+    root.querySelector('[role="alert"]')!.textContent = error instanceof Error ? error.message : "Please retry.";
+    root.querySelector("[data-retry]")!.addEventListener("click", () => { void loadHostedState(); });
+    root.querySelector("[data-signout]")!.addEventListener("click", () => { void signOut(); });
+  }
+}
+
+window.addEventListener("workout-account-changed", () => {
+  profile = loadStoredProfile(); workout = recalculateWorkout(initialWorkout, profile);
+  savedWorkouts = []; workoutRevision = undefined; profileSave = Promise.resolve(); profileConflict = false;
+  promptText = ""; selectedStepIds.clear(); distanceUnits.clear();
+  selectedDate = new Date().toISOString().slice(0, 10); calendarMonth = selectedDate.slice(0, 7); calendarOpen = false;
+  draggedStepId = undefined; modelApiKey = ""; notice = "Ready for review";
+  garminReady = false; garminBusy = false; modelBusy = false; modelError = undefined;
+  garminStatus = "Connect your own Garmin account to send reviewed workouts.";
+  hostedSaving = false;
+  interpretationWarnings = []; jsonExportWarnings = []; hostedLoading = false;
+  render();
+});
 
 function nextStepId(): string {
   stepIdSequence += 1;
   return `manual-${Date.now()}-${stepIdSequence}`;
+}
+
+async function hostedAction(action: () => Promise<void>): Promise<void> {
+  const before = hostedEpoch();
+  try { await action(); }
+  catch (error) { if (before === hostedEpoch()) { notice = error instanceof Error ? error.message : "Request failed. Your draft is kept."; render(); } }
+}
+
+let hostedSaving = false;
+async function saveHostedWorkout(): Promise<void> {
+  if (hostedSaving) return;
+  const before = hostedEpoch();
+  const snapshot = { ...workout, scheduledDate: selectedDate };
+  const revision = workoutRevision;
+  hostedSaving = true; notice = "Saving workout…"; render();
+  await hostedAction(async () => {
+    await profileSave;
+    if (before !== hostedEpoch()) return;
+    if (profileConflict) throw new Error("Resolve the profile save first. Reload your profile or keep a local export of your draft.");
+    const result = workoutEnvelope.parse(await hostedRequest<unknown>(revision === undefined ? "/api/workouts" : `/api/workouts/${encodeURIComponent(snapshot.id)}`,
+      revision === undefined ? "POST" : "PUT", revision === undefined ? snapshot : { revision, data: snapshot }));
+    if (before !== hostedEpoch()) return;
+    savedWorkouts = [result, ...savedWorkouts.filter(item => item.data.id !== result.data.id)];
+    if (workout.id === snapshot.id && workoutRevision === revision) { workout = { ...workout, id: result.data.id }; workoutRevision = result.revision; }
+    notice = "Workout saved to GB10"; render();
+  });
+  if (before === hostedEpoch()) { hostedSaving = false; render(); }
+}
+
+function bindHostedControls(): void {
+  document.querySelector("#account-signout")?.addEventListener("click", () => { void hostedAction(signOut); });
+  document.querySelector("#account-password")?.addEventListener("click", () => { requestPasswordChange(); render(); });
+  document.querySelector<HTMLSelectElement>("#saved-workouts")?.addEventListener("change", event => {
+    const id = (event.target as HTMLSelectElement).value;
+    if (!id || !window.confirm("Load this saved workout? Your current unsaved workout edits will be replaced.")) return;
+    const before = hostedEpoch();
+    void hostedAction(async () => {
+      const result = workoutEnvelope.parse(await hostedRequest<unknown>(`/api/workouts/${encodeURIComponent(id)}`));
+      if (before !== hostedEpoch()) return;
+      workout = recalculateWorkout(result.data, profile); workoutRevision = result.revision;
+      selectedDate = workout.scheduledDate ?? selectedDate;
+      distanceUnits.clear(); selectedStepIds.clear();
+      notice = "Saved workout loaded"; render();
+    });
+  });
+  document.querySelector("#reload-account")?.addEventListener("click", () => {
+    if (!window.confirm("Reload your profile from GB10? Unsaved baseline changes will be replaced. Workout edits are kept.")) return;
+    void hostedAction(async () => { await profileSave; await loadHostedState(); });
+  });
+  document.querySelector("#restore-profile-draft")?.addEventListener("click", () => {
+    if (!window.confirm("Apply your saved unsent baseline changes over the latest GB10 profile?")) return;
+    const before = hostedEpoch();
+    void hostedAction(async () => {
+      const draft = athleteProfileSchema.parse(JSON.parse(localStorage.getItem(userStorageKey("profile-draft")) ?? "null"));
+      await profileSave;
+      const current = profileEnvelope.parse(await hostedRequest<unknown>("/api/profile"));
+      if (before !== hostedEpoch()) return;
+      profileRevision = current.revision; profileConflict = false;
+      persistProfile({ ...draft, id: getHostedSession()!.user.id });
+      workout = recalculateWorkout(workout, profile); notice = "Restoring your baseline changes"; render();
+    });
+  });
+  document.querySelector("#import-browser")?.addEventListener("click", () => {
+    const raw = localStorage.getItem("local-workout-builder:last-review");
+    if (!raw) { notice = "No previous anonymous browser workout is available here."; render(); return; }
+    if (!window.confirm("Import the previous browser workout and profile into this app account? Your current baseline and draft will be replaced; existing saved workouts are kept.")) return;
+    void hostedAction(async () => {
+      const imported = z.object({ profile: athleteProfileSchema, workout: workoutSchema }).parse(JSON.parse(raw));
+      persistProfile({ ...imported.profile, id: getHostedSession()!.user.id });
+      workout = recalculateWorkout(imported.workout, profile); workoutRevision = undefined;
+      selectedDate = workout.scheduledDate ?? selectedDate;
+      notice = "Imported into your draft; save the workout to keep it on GB10"; render();
+    });
+  });
 }
 
 function commitSteps(steps: WorkoutStep[], message: string): void {
@@ -318,8 +475,9 @@ function renderNotesEditor(step: WorkoutStep): string {
 function renderDurationEditor(step: Exclude<WorkoutStep, { type: "repeat" }>): string {
   const kind = step.duration.kind;
   const time = kind === "time" ? editableTimeDuration(step.duration.seconds) : undefined;
-  const value = time?.value ?? (kind === "distance" ? step.duration.metres : undefined);
-  const unit = time?.unit ?? (kind === "distance" ? "m" : "");
+  const distance = kind === "distance" ? editableDistanceDuration(step.duration.metres, workout.sport, distanceUnits.get(step.id)) : undefined;
+  const value = time?.value ?? distance?.value;
+  const unit = time?.unit ?? distance?.unit ?? "";
   return `<span class="duration-editor">
     <select class="duration-kind" data-edit="duration-kind" data-step-id="${escapeHtml(step.id)}" aria-label="${escapeHtml(stepTypeLabel(step.type))} duration type">
       <option value="time" ${kind === "time" ? "selected" : ""}>Time</option>
@@ -327,7 +485,7 @@ function renderDurationEditor(step: Exclude<WorkoutStep, { type: "repeat" }>): s
       <option value="lap" ${kind === "lap" ? "selected" : ""}>Lap button</option>
       <option value="open" ${kind === "open" ? "selected" : ""}>Open</option>
     </select>
-    ${value === undefined ? "" : `<input class="inline-number duration-input" data-edit="duration" data-unit="${unit}" data-step-id="${escapeHtml(step.id)}" type="number" min="1" step="1" value="${value}" aria-label="${escapeHtml(stepTypeLabel(step.type))} duration in ${unit === "min" ? "minutes" : unit === "sec" ? "seconds" : "metres"}" /><small>${unit}</small>`}
+    ${value === undefined ? "" : `<input class="inline-number duration-input" data-edit="duration" data-unit="${unit}" data-step-id="${escapeHtml(step.id)}" type="number" min="${distance === undefined ? "1" : "0"}" step="${distance === undefined ? "1" : "any"}" ${distance === undefined ? "" : 'inputmode="decimal"'} value="${value}" aria-label="${escapeHtml(stepTypeLabel(step.type))} duration in ${unit === "min" ? "minutes" : unit === "sec" ? "seconds" : unit === "km" ? "kilometres" : "metres"}" />${distance === undefined ? `<small>${unit}</small>` : `<select class="distance-unit" data-edit="distance-unit" data-step-id="${escapeHtml(step.id)}" aria-label="${escapeHtml(stepTypeLabel(step.type))} distance unit"><option value="m" ${unit === "m" ? "selected" : ""}>m</option><option value="km" ${unit === "km" ? "selected" : ""}>km</option></select>`}`}
   </span>`;
 }
 
@@ -443,6 +601,11 @@ async function refreshGb10Status(): Promise<void> {
 }
 
 function render(): void {
+  if (sharedMode && accountGateNeeded()) { root.onchange = null; renderAccountGate(root, loadHostedState); return; }
+  if (sharedMode && hostedLoading) { root.innerHTML = '<main class="account-panel"><p role="status">Loading your account…</p></main>'; return; }
+  if (sharedMode) {
+    localStorage.setItem(userStorageKey("draft"), JSON.stringify({ workout: { ...workout, scheduledDate: selectedDate }, revision: workoutRevision }));
+  }
   document.documentElement.dataset.theme = theme;
   document.documentElement.style.colorScheme = theme;
   const baseline = baselineView(workout.sport);
@@ -452,6 +615,7 @@ function render(): void {
       <a class="brand" href="/" aria-label="Local Workout Builder home"><span class="brand-mark">LW</span><span>Local Workout Builder</span></a>
       <div class="topbar-right"><span class="phase-tag">PHASE 3 · REVIEW UI</span><span class="connection"><i></i> Configurable</span><button class="theme-toggle" id="theme-toggle" type="button" aria-label="Switch to ${theme === "dark" ? "light" : "dark"} mode" title="Switch theme">${theme === "dark" ? "☀" : "◐"}</button></div>
     </header>
+    ${sharedMode ? `<div class="account-bar"><span>Signed in as ${escapeHtml(getHostedSession()?.user.username ?? "")}</span><button id="account-password" type="button">Change password</button><button id="account-signout" type="button">Sign out</button></div>` : ""}
 
     <main>
       <section class="intro">
@@ -467,7 +631,7 @@ function render(): void {
           <textarea id="prompt" rows="5">${escapeHtml(promptText)}</textarea>
           <p class="field-hint">Recognized sectioned workouts are parsed locally; other requests use the model. Target math stays deterministic.</p>
           <div class="control-row"><label class="field-label" for="date-picker-toggle">Workout day</label><div class="date-picker"><button class="date-picker-toggle" id="date-picker-toggle" type="button" aria-haspopup="dialog" aria-expanded="${calendarOpen}"><span>${escapeHtml(displayDate(selectedDate))}</span><span class="calendar-icon" aria-hidden="true">□</span></button>${calendarOpen ? renderCalendar() : ""}</div></div>
-          ${sharedMode ? `<div class="model-settings"><strong>GB10 workout interpretation</strong><p class="field-hint">Natural-language requests are processed on GB10. Your saved profile and workouts stay in this browser. Do not include passwords or account details in workout requests.</p><p class="gb10-status" role="status">${escapeHtml(gb10Status)}</p></div>` : `<div class="model-settings"><div class="backend-label"><span class="pulse"></span><strong>REMOTE INFERENCE BACKEND</strong></div><label class="field-label" for="model-url">GB10 / model endpoint</label><input id="model-url" value="${escapeHtml(modelUrl)}" placeholder="http://gb10-host:8080/v1" /><label class="field-label" for="model-name">Model name <span>(optional)</span></label><input id="model-name" placeholder="Leave blank for server default" value="${escapeHtml(modelName)}" /><label class="field-label" for="model-api-key">API key <span>(optional, session only)</span></label><input id="model-api-key" type="password" autocomplete="off" placeholder="Not saved to disk" value="${escapeHtml(modelApiKey)}" />${gb10Connection === "offline" && !gb10Busy ? `<button class="gb10-start" id="gb10-start" type="button">Start default GB10 server</button><p class="field-hint">Uses your local SSH key to start the existing GB10 user service and Tailscale Serve.</p>` : ""}<p class="gb10-status" role="status">${escapeHtml(gb10Status)}</p>${gb10Error.length > 0 ? `<p class="gb10-status" role="alert">${escapeHtml(gb10Error)}</p>` : ""}</div>`}
+          ${sharedMode ? `<div class="model-settings"><strong>GB10 workout interpretation</strong><p class="field-hint">Natural-language requests are processed on GB10. Your profile and saved workouts sync through your app account on GB10. Unsaved edits stay in this browser. Do not include passwords or account details in workout requests.</p><p class="gb10-status" role="status">${escapeHtml(gb10Status)}</p></div>` : `<div class="model-settings"><div class="backend-label"><span class="pulse"></span><strong>REMOTE INFERENCE BACKEND</strong></div><label class="field-label" for="model-url">GB10 / model endpoint</label><input id="model-url" value="${escapeHtml(modelUrl)}" placeholder="http://gb10-host:8080/v1" /><label class="field-label" for="model-name">Model name <span>(optional)</span></label><input id="model-name" placeholder="Leave blank for server default" value="${escapeHtml(modelName)}" /><label class="field-label" for="model-api-key">API key <span>(optional, session only)</span></label><input id="model-api-key" type="password" autocomplete="off" placeholder="Not saved to disk" value="${escapeHtml(modelApiKey)}" />${gb10Connection === "offline" && !gb10Busy ? `<button class="gb10-start" id="gb10-start" type="button">Start default GB10 server</button><p class="field-hint">Uses your local SSH key to start the existing GB10 user service and Tailscale Serve.</p>` : ""}<p class="gb10-status" role="status">${escapeHtml(gb10Status)}</p>${gb10Error.length > 0 ? `<p class="gb10-status" role="alert">${escapeHtml(gb10Error)}</p>` : ""}</div>`}
           <button class="primary-button" id="review-button" type="button" ${modelBusy ? "disabled" : ""}><span>${modelBusy ? "Interpreting…" : "Interpret workout"}</span><b>↗</b></button>
           ${modelError === undefined ? "" : `<div class="model-error" role="alert"><strong>Interpretation failed</strong><span>${escapeHtml(modelError)}</span><small>The existing Review workout was left unchanged.</small></div>`}
         </section>
@@ -493,14 +657,15 @@ function render(): void {
           <label class="field-label" for="baseline">${baseline.label}</label>
           <div class="unit-input"><input id="baseline" inputmode="${baseline.inputMode}" value="${escapeHtml(baseline.value)}" placeholder="${workout.sport === "cycling" ? "250" : "4:30"}" /><span>${baseline.unit}</span></div>
           <div class="baseline-note"><span class="pulse"></span><span>Current profile value<br /><strong>${baseline.current}</strong></span></div>
-          <button class="save-button" id="save-button" type="button"><span>Save locally</span><b>↓</b></button>
+          <button class="save-button" id="save-button" type="button"><span>${sharedMode ? "Save workout to GB10" : "Save locally"}</span><b>↓</b></button>
+          ${sharedMode ? `<div class="saved-workouts"><label class="field-label" for="saved-workouts">Saved workouts</label><select id="saved-workouts"><option value="">Choose a workout</option>${savedWorkouts.map(item => `<option value="${escapeHtml(item.data.id)}">${escapeHtml(item.data.scheduledDate ?? "Unscheduled")} · ${escapeHtml(item.data.name)}</option>`).join("")}</select><button id="reload-account" type="button">Reload profile and saved list</button><button id="import-browser" type="button">Import previous browser workout/profile</button>${localStorage.getItem(userStorageKey("profile-draft")) ? '<button id="restore-profile-draft" type="button">Restore unsaved baseline changes</button>' : ""}<p class="save-note">${profileConflict ? "Profile save needs attention. Your draft is kept; reload to resolve it." : "Your profile and saved workouts are available on your other devices. Unsaved edits remain in this browser."}</p></div>` : ""}
           <button class="save-button" id="fit-export-button" type="button"><span>Download workout FIT</span><b>↓</b></button>
           <button class="save-button" id="garmin-json-export-button" type="button"><span>Download Garmin Connect JSON</span><b>↓</b></button>
-          ${sharedMode ? `<p class="save-note">Shared mode: download your workout to use with your own Garmin account. Account connections are available in the local app.</p>` : `<button class="save-button" id="garmin-check-button" type="button" ${garminBusy ? "disabled" : ""}><span>Check Garmin connection</span></button>
+          <button class="save-button" id="garmin-check-button" type="button" ${garminBusy ? "disabled" : ""}><span>Check Garmin connection</span></button>
           <button class="save-button" id="garmin-login-button" type="button" ${garminBusy ? "disabled" : ""}><span>${garminReady ? "Disconnect Garmin" : "Connect Garmin"}</span></button>
           <button class="save-button" id="garmin-send-button" type="button" ${garminBusy || !garminReady ? "disabled" : ""}><span>${garminBusy ? "Contacting Garmin…" : "Send to Garmin & schedule"}</span></button>
-          <p class="save-note" role="status"><strong>Experimental Garmin integration</strong><br />${escapeHtml(garminStatus)}</p>`}
-          <p class="save-note">Neither download schedules or syncs to Garmin. Import JSON with a compatible third-party Garmin Connect browser extension, then inspect the steps before scheduling. Saved workouts stay in this browser; SQLite remains available to the local Node engine.</p>
+          <p class="save-note" role="status"><strong>Experimental Garmin integration</strong><br />${escapeHtml(garminStatus)}</p>
+          <p class="save-note">Downloads do not schedule or sync to Garmin. ${sharedMode ? "Connect your own Garmin account to send a reviewed workout. App sign-out keeps this connection; Disconnect Garmin removes it." : "Saved workouts stay in this browser; SQLite remains available to the local Node engine."}</p>
           ${jsonExportWarnings.length === 0 ? "" : `<div class="model-error" role="status"><strong>Check after JSON import</strong><ul>${jsonExportWarnings.map((warning) => `<li>${escapeHtml(warning)}</li>`).join("")}</ul></div>`}
         </aside>
       </div>
@@ -508,6 +673,7 @@ function render(): void {
     <footer><span>LOCAL WORKOUT BUILDER <b>v0.1</b></span><span>Truth lives in the engine.</span></footer>
   </div>`;
 
+  if (sharedMode) bindHostedControls();
   document.querySelector<HTMLButtonElement>("#date-picker-toggle")?.addEventListener("click", () => {
     calendarOpen = !calendarOpen;
     calendarMonth = selectedDate.slice(0, 7);
@@ -534,7 +700,7 @@ function render(): void {
   });
   document.querySelector<HTMLTextAreaElement>("#prompt")?.addEventListener("input", (event) => {
     promptText = (event.target as HTMLTextAreaElement).value;
-    localStorage.setItem("local-workout-builder:last-prompt", promptText);
+    localStorage.setItem(sharedMode ? userStorageKey("prompt") : "local-workout-builder:last-prompt", promptText);
   });
   document.querySelector<HTMLInputElement>("#model-url")?.addEventListener("change", (event) => {
     modelUrl = (event.target as HTMLInputElement).value.trim();
@@ -579,6 +745,7 @@ function render(): void {
     button.addEventListener("click", () => {
       const sport = button.dataset.sport as Sport | undefined;
       if (sport === undefined || sport === workout.sport) return;
+      distanceUnits.clear();
       workout = recalculateWorkout({
         ...workout,
         sport,
@@ -706,6 +873,7 @@ function render(): void {
   });
 
   document.querySelector<HTMLButtonElement>("#review-button")?.addEventListener("click", () => {
+    const before = hostedEpoch();
     const prompt = document.querySelector<HTMLTextAreaElement>("#prompt")?.value.trim() ?? "";
     if (prompt.length === 0) {
       notice = "Enter a workout request";
@@ -714,11 +882,12 @@ function render(): void {
     }
     modelBusy = true;
     modelError = undefined;
-    notice = "Interpreting workout";
+    notice = sharedMode ? "Waiting for GB10 / interpreting workout" : "Interpreting workout";
     render();
     void parseWorkout({
       provider: new LlamaServerProvider({
         baseUrl: modelUrl,
+        ...(sharedMode ? { fetch: accountFetch() } : {}),
         ...(modelName.length === 0 ? {} : { model: modelName }),
         ...(modelApiKey.length === 0 ? {} : { apiKey: modelApiKey }),
       }),
@@ -728,7 +897,10 @@ function render(): void {
       referenceDate: selectedDate,
       timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     }).then((result) => {
+      if (before !== hostedEpoch()) return;
       workout = result.workout;
+      workoutRevision = undefined;
+      distanceUnits.clear();
       persistProfile(result.profile);
       selectedStepIds = new Set();
       selectedDate = result.workout.scheduledDate ?? selectedDate;
@@ -738,6 +910,7 @@ function render(): void {
       notice = interpretationWarnings.length > 0 ? "Review interpretation" : result.warnings.length === 0 ? "Interpretation ready" : `${result.warnings.length} baseline needed`;
       render();
     }).catch((error: unknown) => {
+      if (before !== hostedEpoch()) return;
       modelBusy = false;
       modelError = error instanceof Error ? error.message : "Model request failed";
       notice = "Interpretation failed";
@@ -761,6 +934,26 @@ function render(): void {
       return;
     }
     if (edit === undefined || stepId === undefined) return;
+    if (edit === "distance-unit") {
+      if (input.value !== "m" && input.value !== "km") return;
+      distanceUnits.set(stepId, input.value);
+      render();
+      return;
+    }
+    if (edit === "duration" && (input.dataset.unit === "m" || input.dataset.unit === "km")) {
+      const metres = parseDistanceMetres(input.value, input.dataset.unit);
+      if (metres === undefined) {
+        notice = "Enter a positive distance";
+        render();
+        return;
+      }
+      workout = { ...workout, steps: updateSteps(workout.steps, stepId, (step) =>
+        step.type !== "repeat" && step.duration.kind === "distance"
+          ? { ...step, duration: { kind: "distance", metres } }
+          : step), updatedAt: new Date().toISOString() };
+      render();
+      return;
+    }
     if (edit === "notes") {
       const notes = input.value.trim();
       workout = { ...workout, steps: updateSteps(workout.steps, stepId, (step) => {
@@ -843,7 +1036,6 @@ function render(): void {
       workout = { ...workout, steps: updateSteps(workout.steps, stepId, (step) => {
         if (step.type === "repeat") return step;
         if (step.duration.kind === "time") return { ...step, duration: { kind: "time", seconds: input.dataset.unit === "min" ? numericValue * 60 : numericValue } };
-        if (step.duration.kind === "distance") return { ...step, duration: { kind: "distance", metres: numericValue } };
         return step;
       }), updatedAt: new Date().toISOString() };
     } else if (edit === "target") {
@@ -879,6 +1071,7 @@ function render(): void {
     render();
   });
   document.querySelector<HTMLButtonElement>("#save-button")?.addEventListener("click", () => {
+    if (sharedMode) { void saveHostedWorkout(); return; }
     localStorage.setItem("local-workout-builder:last-review", JSON.stringify({ workout, profile }));
     notice = "Saved in browser";
     render();
@@ -919,31 +1112,36 @@ function render(): void {
     render();
   });
   document.querySelector<HTMLButtonElement>("#garmin-login-button")?.addEventListener("click", async () => {
+    const before = hostedEpoch();
     if (garminBusy) return;
     if (!garminReady) {
-      showGarminLogin((result) => { garminReady = result.ok; garminStatus = garminResultMessage(result); render(); });
+      showGarminLogin((result) => { if (before !== hostedEpoch()) return; garminReady = result.ok; garminStatus = garminResultMessage(result); render(); });
       return;
     }
-    if (!window.confirm("Remove the local Garmin session? Existing workouts and scheduling receipts will be kept.")) return;
+    if (!window.confirm("Disconnect this account's Garmin session? Existing workouts and scheduling receipts will be kept.")) return;
     garminBusy = true; render();
     try {
       const result = await requestGarmin("logout");
+      if (before !== hostedEpoch()) return;
       if (result.ok) garminReady = false;
       garminStatus = garminResultMessage(result);
-    } finally { garminBusy = false; render(); }
+    } finally { if (before === hostedEpoch()) { garminBusy = false; render(); } }
   });
   document.querySelector<HTMLButtonElement>("#garmin-check-button")?.addEventListener("click", async () => {
+    const before = hostedEpoch();
     if (garminBusy) return;
     garminBusy = true;
     garminStatus = "Checking local Garmin session…";
     render();
     try {
       const result = await requestGarmin("status");
+      if (before !== hostedEpoch()) return;
       garminReady = result.ok && result.code === "READY";
       garminStatus = garminResultMessage(result);
-    } finally { garminBusy = false; render(); }
+    } finally { if (before === hostedEpoch()) { garminBusy = false; render(); } }
   });
   document.querySelector<HTMLButtonElement>("#garmin-send-button")?.addEventListener("click", async () => {
+    const before = hostedEpoch();
     if (garminBusy || !garminReady) return;
     // Freeze exactly the reviewed data confirmed by the user, even if edits follow.
     const confirmedWorkout = structuredClone(workout);
@@ -955,16 +1153,24 @@ function render(): void {
       garminStatus = "Uploading, checking workout, and verifying calendar…";
       render();
       const operationId = await garminOperationId(confirmedWorkout, confirmedProfile, confirmedDate);
+      if (before !== hostedEpoch()) return;
       const result = await requestGarmin("send", { workout: confirmedWorkout, profile: confirmedProfile, date: confirmedDate, operationId });
+      if (before !== hostedEpoch()) return;
       garminStatus = `${garminResultMessage(result)} (${confirmedWorkout.name}, ${confirmedDate})`;
       if (["AUTH_REQUIRED", "SETUP_REQUIRED", "UNAVAILABLE"].includes(result.code)) garminReady = false;
     } catch {
+      if (before !== hostedEpoch()) return;
       garminStatus = "Could not prepare the Garmin request. Check resolved targets and browser storage; local downloads remain available.";
-    } finally { garminBusy = false; render(); }
+    } finally { if (before === hostedEpoch()) { garminBusy = false; render(); } }
   });
 }
 
-render();
+if (sharedMode) {
+  root.innerHTML = '<main class="account-panel"><p role="status">Loading your account…</p></main>';
+  const before = hostedEpoch();
+  void restoreHostedSession().then(found => { if (before !== hostedEpoch()) return; if (found) return loadHostedState(); hostedLoading = false; render(); });
+  setInterval(() => { if (getHostedSession()) void hostedRequest("/api/auth/session").catch(() => {}); }, 60_000);
+} else render();
 if (!sharedMode) void requestGarmin("status").then((result) => {
   garminReady = result.ok && result.code === "READY";
   garminStatus = garminResultMessage(result);

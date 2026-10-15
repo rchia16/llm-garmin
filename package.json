@@ -15,6 +15,7 @@
     "dev": "vite",
     "preview": "vite preview",
     "start:shared": "node dist/shared/start.js",
+    "account": "node dist/shared/admin.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit -p tsconfig.json"

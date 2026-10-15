@@ -1,12 +1,14 @@
 import { requestGarmin } from "./garminClient.js";
 import { garminResultMessage, type GarminResult } from "../local/garminProtocol.js";
+import { hostedEpoch, isHosted } from "./hostedClient.js";
 
 export function showGarminLogin(onResult: (result: GarminResult) => void): void {
+  const before = hostedEpoch();
   const dialog = document.createElement("dialog");
   dialog.className = "garmin-login";
   dialog.setAttribute("aria-labelledby", "garmin-login-title");
   dialog.innerHTML = `<h2 id="garmin-login-title">Connect Garmin</h2>
-    <p>Experimental integration. Your password is used only to sign in, not saved. The session is stored privately on this computer.</p>
+    <p>Experimental integration. Your password is used only to sign in, not saved. ${isHosted() ? "Your Garmin session is stored privately for your app account on GB10." : "The session is stored privately on this computer."}</p>
     <form><div class="garmin-credentials">
       <label class="field-label" for="garmin-email">Garmin email</label>
       <input id="garmin-email" name="email" type="email" autocomplete="username" required maxlength="254" />
@@ -29,7 +31,7 @@ export function showGarminLogin(onResult: (result: GarminResult) => void): void 
   let busy = false;
   let closed = false;
   const cancel = (): void => {
-    if (closed) return;
+    if (closed || before !== hostedEpoch()) return;
     closed = true;
     password.value = ""; code.value = ""; email.value = "";
     dialog.close(); dialog.remove();
@@ -39,13 +41,13 @@ export function showGarminLogin(onResult: (result: GarminResult) => void): void 
   dialog.querySelector("[data-cancel]")!.addEventListener("click", cancel);
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
-    if (busy) return;
+    if (busy || before !== hostedEpoch()) return;
     busy = true; submit.disabled = true;
     status.textContent = "Signing in…";
     const request = mfa ? requestGarmin("mfa", { code: code.value }) : requestGarmin("login", { email: email.value.trim(), password: password.value });
     password.value = ""; code.value = "";
     const result = await request;
-    if (closed) return;
+    if (closed || before !== hostedEpoch()) return;
     busy = false; submit.disabled = false;
     status.textContent = garminResultMessage(result);
     if (result.code === "MFA_REQUIRED") {

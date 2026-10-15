@@ -36,48 +36,57 @@ export function prepareGarminSend(input: unknown): { operationId: string; date: 
 }
 
 export type GarminRunner = (command: "status" | "send" | "logout", input?: unknown) => Promise<GarminResult>;
-export const runGarminBridge: GarminRunner = async (command, input) => {
-  const executable = join(root, process.platform === "win32" ? ".venv/Scripts/python.exe" : ".venv/bin/python");
-  if (!existsSync(executable)) return { ok: false, code: "SETUP_REQUIRED" };
-  return new Promise((resolve) => {
-    const child = spawn(executable, [join(root, "python/garmin_bridge.py"), command], {
-      cwd: root, windowsHide: true, shell: false,
-      env: { ...process.env, PYTHONUTF8: "1", PYTHONUNBUFFERED: "1" },
-      stdio: ["pipe", "pipe", "pipe"],
+export function garminEnvironment(sessionDirectory?: string): NodeJS.ProcessEnv {
+  return { ...process.env, PYTHONUTF8: "1", PYTHONUNBUFFERED: "1", PYTHONDONTWRITEBYTECODE: "1",
+    ...(sessionDirectory === undefined ? {} : { GARMIN_HOSTED: "1", GARMIN_SESSION_DIR: sessionDirectory, GARMIN_EMAIL: "" }) };
+}
+
+export function createGarminRunner(sessionDirectory?: string): GarminRunner {
+  return async (command, input) => {
+    const executable = join(root, process.platform === "win32" ? ".venv/Scripts/python.exe" : ".venv/bin/python");
+    if (!existsSync(executable)) return { ok: false, code: "SETUP_REQUIRED" };
+    return new Promise((resolve) => {
+      const child = spawn(executable, [join(root, "python/garmin_bridge.py"), command], {
+        cwd: root, windowsHide: true, shell: false,
+        env: garminEnvironment(sessionDirectory),
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+      let output = "";
+      let bytes = 0;
+      let settled = false;
+      const finish = (result: GarminResult): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(result);
+      };
+      const timer = setTimeout(() => {
+        child.kill();
+        finish({ ok: false, code: "BRIDGE_TIMEOUT" });
+      }, command === "status" ? 30_000 : 90_000);
+      child.stdout.setEncoding("utf8");
+      child.stdout.on("data", (chunk: string) => {
+        bytes += Buffer.byteLength(chunk);
+        if (bytes > 16_384) { child.kill(); finish({ ok: false, code: "BRIDGE_FAILED" }); }
+        else output += chunk;
+      });
+      child.stderr.on("data", (chunk: Buffer) => {
+        // Never forward third-party stderr; count it to bound runaway output.
+        bytes += chunk.length;
+        if (bytes > 16_384) { child.kill(); finish({ ok: false, code: "BRIDGE_FAILED" }); }
+      });
+      child.on("error", () => finish({ ok: false, code: "SETUP_REQUIRED" }));
+      child.stdin.on("error", () => { /* EPIPE is handled by the exit/result path. */ });
+      child.on("close", () => {
+        try { finish(garminResultSchema.parse(JSON.parse(output))); }
+        catch { finish({ ok: false, code: "BRIDGE_FAILED" }); }
+      });
+      child.stdin.end(input === undefined ? "" : JSON.stringify(input));
     });
-    let output = "";
-    let bytes = 0;
-    let settled = false;
-    const finish = (result: GarminResult): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve(result);
-    };
-    const timer = setTimeout(() => {
-      child.kill();
-      finish({ ok: false, code: "BRIDGE_TIMEOUT" });
-    }, command === "status" ? 30_000 : 90_000);
-    child.stdout.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => {
-      bytes += Buffer.byteLength(chunk);
-      if (bytes > 16_384) { child.kill(); finish({ ok: false, code: "BRIDGE_FAILED" }); }
-      else output += chunk;
-    });
-    child.stderr.on("data", (chunk: Buffer) => {
-      // Never forward third-party stderr; count it to bound runaway output.
-      bytes += chunk.length;
-      if (bytes > 16_384) { child.kill(); finish({ ok: false, code: "BRIDGE_FAILED" }); }
-    });
-    child.on("error", () => finish({ ok: false, code: "SETUP_REQUIRED" }));
-    child.stdin.on("error", () => { /* EPIPE is handled by the exit/result path. */ });
-    child.on("close", () => {
-      try { finish(garminResultSchema.parse(JSON.parse(output))); }
-      catch { finish({ ok: false, code: "BRIDGE_FAILED" }); }
-    });
-    child.stdin.end(input === undefined ? "" : JSON.stringify(input));
-  });
-};
+  };
+}
+
+export const runGarminBridge: GarminRunner = createGarminRunner();
 
 async function readBody(request: IncomingMessage): Promise<unknown> {
   if (!/^application\/json(?:\s*;|$)/i.test(request.headers["content-type"] ?? "")) throw new Error("INVALID_REQUEST");

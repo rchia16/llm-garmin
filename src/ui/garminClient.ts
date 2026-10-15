@@ -1,15 +1,19 @@
 import type { AthleteProfile, Workout } from "../domain/index.js";
 import { exportGarminConnectJson } from "../garminConnectJson/export.js";
 import { garminResultSchema, type GarminResult } from "../local/garminProtocol.js";
+import { hostedEpoch, hostedFetch, isHosted, userStorageKey } from "./hostedClient.js";
 
 export async function requestGarmin(action: "status" | "send" | "login" | "mfa" | "cancel" | "logout", input?: unknown, fetcher: typeof fetch = fetch): Promise<GarminResult> {
   try {
-    const response = await fetcher(`/api/local/garmin/${action}`, {
+    const before = hostedEpoch();
+    const hosted = isHosted();
+    const response = await (hosted && fetcher === fetch ? hostedFetch : fetcher)(`/api/${hosted ? "garmin" : "local/garmin"}/${action}`, {
       method: "POST", headers: { "Content-Type": "application/json", "X-LLM-Garmin-Control": `garmin-${action}` },
       ...(input === undefined ? {} : { body: JSON.stringify(input) }),
       signal: AbortSignal.timeout(action === "login" || action === "mfa" ? 185_000 : action === "send" ? 95_000 : 35_000),
     });
     const parsed = garminResultSchema.safeParse(await response.json());
+    if (before !== hostedEpoch()) return { ok: false, code: "CANCELLED" };
     return parsed.success ? parsed.data : { ok: false, code: "UNAVAILABLE" };
   } catch (error) {
     return { ok: false, code: error instanceof DOMException && (error.name === "TimeoutError" || error.name === "AbortError") ? "BRIDGE_TIMEOUT" : "UNAVAILABLE" };
@@ -24,10 +28,12 @@ export function garminConfirmation(workout: Workout, profile: AthleteProfile, da
 }
 
 export async function garminOperationId(workout: Workout, profile: AthleteProfile, date: string, storage: Storage = localStorage): Promise<string> {
+  const before = hostedEpoch();
   const payload = JSON.stringify([date, exportGarminConnectJson(workout, profile).workout]);
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(payload));
+  if (before !== hostedEpoch()) throw new Error("Account changed.");
   const fingerprint = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
-  const key = "local-workout-builder-garmin-operations";
+  const key = isHosted() ? userStorageKey("garmin-operations") : "local-workout-builder-garmin-operations";
   let previous: { fingerprint: string; operationId: string }[] = [];
   try {
     const parsed: unknown = JSON.parse(storage.getItem(key) ?? "[]");

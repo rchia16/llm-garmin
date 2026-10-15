@@ -1,12 +1,12 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { garminLoginSchema, garminMfaSchema, root, type GarminAction } from "./garminControl.js";
+import { garminEnvironment, garminLoginSchema, garminMfaSchema, root, type GarminAction } from "./garminControl.js";
 import { garminResultSchema, type GarminResult } from "./garminProtocol.js";
 
 // One short-lived login process, holding the Python storage lock through MFA.
 // Credentials are stdin data, never shell arguments, environment, or log output.
-export function createGarminAuth() {
+export function createGarminAuth(sessionDirectory?: string) {
   let child: ChildProcessWithoutNullStreams | undefined;
   let waiting: ((result: GarminResult) => void) | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -41,7 +41,7 @@ export function createGarminAuth() {
       waiting = resolve;
       const current = spawn(executable, [join(root, "python/garmin_bridge.py"), "web-login"], {
         cwd: root, windowsHide: true, shell: false, stdio: ["pipe", "pipe", "pipe"],
-        env: { ...process.env, PYTHONUTF8: "1", PYTHONUNBUFFERED: "1" },
+        env: garminEnvironment(sessionDirectory),
       });
       child = current;
       timer = setTimeout(() => stop({ ok: false, code: "BRIDGE_TIMEOUT" }), 180_000);

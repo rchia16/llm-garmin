@@ -2,6 +2,8 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { z } from "zod";
+import { AccountError, type Session } from "./accounts.js";
+import type { HostedApi } from "./hostedApi.js";
 
 const MAX_BODY_BYTES = 65_536;
 const MAX_RESPONSE_BYTES = 131_072;
@@ -27,6 +29,7 @@ export type SharedServerOptions = {
   inferenceUrl?: string;
   inferenceApiKey?: string;
   fetch?: typeof fetch;
+  hosted?: HostedApi;
 };
 
 async function boundedBody(source: AsyncIterable<unknown>, limit: number): Promise<string> {
@@ -41,7 +44,7 @@ async function boundedBody(source: AsyncIterable<unknown>, limit: number): Promi
   return Buffer.concat(chunks).toString("utf8");
 }
 
-/** Public server deliberately has no imports of Garmin, SSH, SQLite, or private configuration. */
+/** Hosted accounts are injected; local machine controls are never exposed here. */
 export function createSharedServer(options: SharedServerOptions) {
   const origin = new URL(options.publicOrigin);
   if (origin.protocol !== "https:" || origin.origin !== options.publicOrigin) throw new Error("PUBLIC_ORIGIN must be an HTTPS origin without a trailing slash or path.");
@@ -78,35 +81,56 @@ export function createSharedServer(options: SharedServerOptions) {
       } catch { json(response, 200, { state: "offline" }); }
       return;
     }
+    if (options.hosted && await options.hosted.handle(request, response, path)) return;
     if (path === "/api/inference/v1/chat/completions") {
+      let session: Session | undefined;
+      if (options.hosted) {
+        try {
+          session = options.hosted.authenticate(request, true);
+          response.setHeader("X-Workout-User", session.user.id);
+          if (session.user.mustChangePassword) throw new AccountError(403, "PASSWORD_CHANGE_REQUIRED");
+        } catch (error) { options.hosted.error(response, error); return; }
+      }
       if (request.method !== "POST" || request.headers.origin !== origin.origin
         || !/^application\/json(?:\s*;|$)/i.test(request.headers["content-type"] ?? "")) {
         json(response, 403, { error: "FORBIDDEN" }); return;
       }
       if (Date.now() - budgetStartedAt >= 60_000) { budgetStartedAt = Date.now(); requestsInWindow = 0; }
       // A global limit is intentional: no IP/user tracking and no trust in proxy headers.
-      if (active >= 2 || requestsInWindow >= 30) {
+      if ((!options.hosted && active >= 2) || requestsInWindow >= 30) {
         response.setHeader("Retry-After", "60");
         json(response, 429, { error: "INFERENCE_BUSY" }); return;
       }
       if (Number(request.headers["content-length"] ?? 0) > MAX_BODY_BYTES) { json(response, 413, { error: "BODY_TOO_LARGE" }); return; }
+      let release: (() => void) | undefined;
+      const abort = new AbortController();
+      const disconnected = (): void => { if (!response.writableEnded) abort.abort(); };
+      response.on("close", disconnected);
       active += 1;
       requestsInWindow += 1;
       try {
         let payload: z.infer<typeof generationSchema>;
         try { payload = generationSchema.parse(JSON.parse(await boundedBody(request, MAX_BODY_BYTES))); }
         catch (error) { json(response, error instanceof Error && error.message === "BODY_TOO_LARGE" ? 413 : 400, { error: "INVALID_REQUEST" }); return; }
+        if (options.hosted && session) {
+          release = await options.hosted.queue.acquire(session.user.id, session.id, abort.signal);
+          options.hosted.assertSession(session);
+        }
         const result = await requestFetch(`${upstream.href}/chat/completions`, {
-          method: "POST", redirect: "manual", signal: AbortSignal.timeout(90_000),
+          method: "POST", redirect: "manual", signal: AbortSignal.any([AbortSignal.timeout(90_000), abort.signal]),
           headers: { "Content-Type": "application/json", ...(options.inferenceApiKey ? { Authorization: `Bearer ${options.inferenceApiKey}` } : {}) },
           body: JSON.stringify(payload),
         });
         if (!result.ok || !result.body) { json(response, 502, { error: "INFERENCE_UNAVAILABLE" }); return; }
         // Strip upstream metadata/errors; never echo configuration or credentials.
         const completion = completionSchema.parse(JSON.parse(await boundedBody(result.body, MAX_RESPONSE_BYTES)));
+        if (options.hosted && session) options.hosted.assertSession(session);
         json(response, 200, completion);
-      } catch { json(response, 502, { error: "INFERENCE_UNAVAILABLE" }); }
-      finally { active -= 1; }
+      } catch (error) {
+        if (options.hosted && error instanceof AccountError) options.hosted.error(response, error);
+        else if (!response.destroyed) json(response, 502, { error: "INFERENCE_UNAVAILABLE" });
+      }
+      finally { active -= 1; release?.(); response.off("close", disconnected); }
       return;
     }
     if (request.method !== "GET" && request.method !== "HEAD") { json(response, 404, { error: "NOT_FOUND" }); return; }

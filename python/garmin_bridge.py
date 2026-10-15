@@ -141,6 +141,13 @@ def send_workout(data, api, receipts: Receipts, sleep=time.sleep):
 
 
 def load_config():
+    # Hosted requests must supply a server-selected user directory. Never inherit
+    # an owner's local .env, email, or default Garmin session.
+    if os.environ.get("GARMIN_HOSTED") == "1":
+        configured = os.environ.get("GARMIN_SESSION_DIR")
+        if not configured:
+            raise BridgeError("CONFIG_INVALID")
+        return None, private_directory(configured, REPO)
     try:
         from dotenv import dotenv_values
     except ImportError:
@@ -153,6 +160,8 @@ def load_config():
 
 
 def get_client(directory: Path, email=None, password=None, factory=None, prompt_mfa=None):
+    if os.environ.get("GARMIN_HOSTED") == "1" and password is None and not (directory / "garmin_tokens.json").is_file():
+        raise BridgeError("AUTH_REQUIRED")
     if factory is None:
         try:
             from garminconnect import Garmin

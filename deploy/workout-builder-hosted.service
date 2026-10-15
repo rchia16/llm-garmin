@@ -1,0 +1,28 @@
+[Unit]
+Description=Workout Builder with isolated user accounts
+After=network.target
+
+[Service]
+Type=simple
+User=workout-builder
+Group=workout-builder
+# Replaced with the checked deployment directory by install-hosted-service.sh.
+WorkingDirectory=@RUNTIME_DIRECTORY@
+Environment=NODE_ENV=production
+Environment=PUBLIC_ORIGIN=https://promaxgb10-4e2b.tail06a565.ts.net:8443
+Environment=INFERENCE_URL=http://127.0.0.1:8081/v1
+Environment=PORT=4173
+Environment=WORKOUT_DATA_DIR=/var/lib/local-workout-builder
+ExecStart=/usr/bin/node @RUNTIME_DIRECTORY@/dist/shared/start.js
+StateDirectory=local-workout-builder
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+Restart=on-failure
+RestartSec=5
+# Use OS ownership/ACLs rather than namespace protections unavailable on GB10.
+
+[Install]
+WantedBy=multi-user.target

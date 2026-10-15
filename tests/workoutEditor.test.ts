@@ -8,6 +8,8 @@ import {
   createWorkoutStep,
   defaultDurationForKind,
   editableTimeDuration,
+  editableDistanceDuration,
+  parseDistanceMetres,
   deleteWorkoutStep,
   moveWorkoutStep,
   preferredInsertionIndex,
@@ -39,6 +41,36 @@ const repeat: WorkoutStep = {
 };
 
 describe("workout review block editor", () => {
+  it("defaults run and ride distances to kilometres and swimming to metres", () => {
+    expect(editableDistanceDuration(1000, "running")).toEqual({ value: 1, unit: "km" });
+    expect(editableDistanceDuration(40000, "cycling")).toEqual({ value: 40, unit: "km" });
+    expect(editableDistanceDuration(100, "swimming")).toEqual({ value: 100, unit: "m" });
+  });
+
+  it("accepts decimal distances and converts selected units without changing the distance", () => {
+    for (const [text, unit, expectedMetres] of [
+      ["1", "km", 1000], ["1.5", "km", 1500], ["0.4", "km", 400],
+      ["400", "m", 400], ["0.5", "m", 0.5], ["40", "km", 40000],
+    ] as const) {
+      const metres = parseDistanceMetres(text, unit);
+      expect(metres).toBe(expectedMetres);
+      for (const selectedUnit of ["m", "km"] as const) {
+        const displayed = editableDistanceDuration(metres!, "running", selectedUnit);
+        expect(displayed.unit).toBe(selectedUnit);
+        expect(parseDistanceMetres(String(displayed.value), displayed.unit)).toBeCloseTo(expectedMetres);
+      }
+    }
+  });
+
+  it("rejects invalid distances including overflow after conversion", () => {
+    for (const unit of ["m", "km"] as const) {
+      for (const text of ["", " ", "0", "-1", "NaN", "Infinity", "abc", "1e309"]) {
+        expect(parseDistanceMetres(text, unit)).toBeUndefined();
+      }
+    }
+    expect(parseDistanceMetres("1e308", "km")).toBeUndefined();
+  });
+
   it("sets valid sport-specific zones without changing other blocks or notes", () => {
     for (const [sport, zone] of [["running", "z2_aerobic"], ["cycling", "endurance"], ["swimming", "z5a_super_threshold"]] as const) {
       const original: WorkoutStep[] = [{ id: "group", type: "repeat", repetitions: 2, steps: [

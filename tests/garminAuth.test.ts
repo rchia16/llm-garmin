@@ -16,6 +16,14 @@ const credentials = { email: "test@example.invalid", password: "dummy-secret" };
 afterEach(() => { vi.useRealTimers(); vi.clearAllMocks(); mocks.exists.mockReturnValue(true); });
 
 describe("Garmin login subprocess protocol (no live account)", () => {
+  it("passes a trusted hosted directory and suppresses owner Garmin configuration", async () => {
+    const child = fakeChild();
+    const auth = createGarminAuth("/private/users/alice");
+    const pending = auth("login", credentials);
+    expect(mocks.spawn.mock.calls[0]?.[2].env).toMatchObject({ GARMIN_HOSTED: "1", GARMIN_SESSION_DIR: "/private/users/alice", GARMIN_EMAIL: "" });
+    child.stdout.write('{"ok":true,"code":"READY"}\n');
+    await pending;
+  });
   it("keeps credentials off argv/env and continues MFA in the same process", async () => {
     const child = fakeChild();
     const auth = createGarminAuth();

@@ -1,2 +1,2 @@
-garminconnect
-python-dotenv
+garminconnect==0.3.17
+python-dotenv==1.2.4

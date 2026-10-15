@@ -15,6 +15,21 @@ export function editableTimeDuration(seconds: number): { value: number; unit: "m
     : { value: seconds, unit: "sec" };
 }
 
+export type DistanceUnit = "m" | "km";
+
+export function editableDistanceDuration(
+  metres: number,
+  sport: Sport,
+  unit: DistanceUnit = sport === "swimming" ? "m" : "km",
+): { value: number; unit: DistanceUnit } {
+  return { value: unit === "km" ? metres / 1000 : metres, unit };
+}
+
+export function parseDistanceMetres(text: string, unit: DistanceUnit): number | undefined {
+  const metres = Number(text) * (unit === "km" ? 1000 : 1);
+  return Number.isFinite(metres) && metres > 0 ? metres : undefined;
+}
+
 export type StepContext = {
   parentId: string | null;
   index: number;

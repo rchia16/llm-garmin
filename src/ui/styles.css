@@ -172,6 +172,8 @@ h3 { margin-top: 8px; font: 600 25px/1.05 'Space Grotesk', sans-serif; letter-sp
 .duration-editor { display: inline-flex; align-items: baseline; gap: 4px; }
 .duration-kind { width: auto; padding: 2px 16px 2px 2px; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; color: var(--muted); background: var(--paper); font-size: 10px; outline: none; }
 .duration-kind:focus { border-color: var(--coral); }
+.distance-unit { padding: 2px; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; color: var(--muted); background: var(--paper); font-size: 11px; }
+.distance-unit:focus { outline: 2px solid var(--coral); outline-offset: 2px; }
 .step-main small { color: var(--muted); font-size: 9px; }
 .target-input:focus, .inline-number:focus { border-color: var(--coral); box-shadow: 0 2px 0 var(--mint); }
 .source { padding: 3px 5px; font-size: 8px; font-weight: 700; letter-spacing: .1em; }
@@ -229,4 +231,12 @@ footer b { color: var(--coral); }
 .garmin-login::backdrop { background: rgba(0, 0, 0, .55); }
 .garmin-login input { width: 100%; box-sizing: border-box; padding: 12px; margin: 8px 0 16px; }
 .garmin-login h2 { margin-bottom: 16px; }
+.account-panel { width: min(480px, calc(100% - 40px)); margin: 60px auto; line-height: 1.5; }
+.account-panel h1 { font-size: 2rem; }
+.account-panel label { display: block; margin-top: 20px; }
+.account-panel input { display: block; width: 100%; padding: 12px; margin-top: 6px; }
+.account-panel button { margin: 12px 8px 12px 0; min-height: 44px; }
+.account-bar { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; padding-top: 16px; }
+.account-bar button, .saved-workouts button { min-height: 44px; padding: 8px; background: var(--paper); color: var(--ink); border: 1px solid var(--line); }
+.saved-workouts select { display: block; width: 100%; padding: 12px; margin: 12px 0; background: var(--paper); color: var(--ink); }
 .garmin-login p { font-size: 13px; line-height: 1.5; }

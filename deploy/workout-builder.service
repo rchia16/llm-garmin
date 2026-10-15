@@ -1,22 +1,23 @@
 [Unit]
-Description=Shared Local Workout Builder (no Garmin account access)
+Description=Workout Builder user service (development; use hosted system service in production)
 After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=%h/llm-garmin
+WorkingDirectory=%h/projects/llm-garmin
 Environment=NODE_ENV=production
 Environment=PUBLIC_ORIGIN=https://promaxgb10-4e2b.tail06a565.ts.net:8443
 Environment=INFERENCE_URL=http://127.0.0.1:8081/v1
 Environment=PORT=4173
-ExecStart=/usr/bin/node --experimental-permission --allow-fs-read=%h/llm-garmin/package.json --allow-fs-read=%h/llm-garmin/dist/shared --allow-fs-read=%h/llm-garmin/dist-ui --allow-fs-read=%h/llm-garmin/node_modules %h/llm-garmin/dist/shared/start.js
+ExecStart=/usr/bin/node %h/projects/llm-garmin/dist/shared/start.js
 Restart=on-failure
 RestartSec=5
 UMask=0077
 NoNewPrivileges=true
 # GB10 disables unprivileged user namespaces, so namespace-based protections
 # such as PrivateTmp/ProtectHome cannot be used in this user unit.
-# Node denies filesystem writes, child processes, and unrelated filesystem reads.
+# Hosted accounts require SQLite writes and the fixed Python child process.
+# Production uses workout-builder-hosted.service under a dedicated OS account.
 
 [Install]
 WantedBy=default.target

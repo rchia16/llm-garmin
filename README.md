@@ -204,6 +204,8 @@ After reviewing a workout, select **Download workout FIT**. The export validates
 
 Garmin Connect has a wireless path for workouts **already in Connect**: add the workout to its calendar, then sync the paired device. The experimental bridge verifies the Connect workout/calendar entry, not delivery to your watch. Garmin's course/activity import instructions should not be treated as workout import instructions. FIT download remains a local fallback.
 
+Distance fields in Review have an **m / km** selector. Running and cycling default to kilometres; swimming defaults to metres. Enter decimal distances such as `1.5 km` or `0.4 km`, or select metres for `400 m`. Switching units converts the displayed number without changing the distance. Each block remembers its unit during editing; switching sports or interpreting a new workout restores the sport defaults. Saved workouts and exports continue to use metres internally.
+
 ## Experimental Garmin Connect upload and scheduling
 
 This optional integration uses the unofficial [python-garminconnect client](https://github.com/cyberjunky/python-garminconnect), isolated from workout creation and FIT export. No official Garmin developer approval, browser extension, GB10 account or USB cable is required. Garmin may change its private endpoints at any time. Creating `.env` alone does not log in or grant account access.
@@ -282,82 +284,85 @@ Run credential-free bridge tests with `.\.venv\Scripts\python.exe -m unittest di
 
 ## Share the workout builder from GB10
 
-The shared server is separate from the local Vite server. It serves the production UI and a bounded, same-origin inference proxy. Visitors can describe, review, edit, save in their browser, and download FIT/JSON. Profiles and saved workouts are not stored in a shared server database. Natural-language prompts and the profile context needed for interpretation are sent to the GB10 model; deterministic formats are interpreted in the browser. The app does not log prompts or profiles; separately check any inference gateway logging.
+The hosted server supports administrator-created app accounts, separate Garmin connections, and cross-device profiles and saved workouts. The public HTTPS page requires app sign-in for personal data, inference, and Garmin actions. App passwords and Garmin passwords are separate. There is no public registration, email recovery, or administrative web dashboard.
 
-**Shared mode cannot connect to Garmin accounts or schedule through the host's account.** Its server does not load the Garmin bridge, SSH controls, SQLite store, or repository `.env`. Those endpoints return 404, even when a visitor supplies local-control headers. Direct Garmin scheduling remains available when running the local app. Per-visitor Garmin login/session isolation is not implemented; do not expose the local Vite server or Python bridge through Funnel.
+Each account starts without training baselines. Profile changes save to GB10; **Save workout to GB10** explicitly saves the reviewed workout. Use **Saved workouts** to load it on another device. Unsaved workout edits and unsent profile changes are kept in browser storage under that user's ID. Conflicting edits return a recoverable error instead of overwriting another device's changes. Reload the server profile or deliberately restore unsent baseline changes; load the saved workout to resolve a workout conflict. Previous anonymous browser data can be imported only after confirmation. App sign-out clears displayed personal data but keeps the user's saved Garmin connection. **Disconnect Garmin** removes only that user's Garmin tokens, retaining scheduling receipts.
 
-Tailscale Funnel makes a service reachable from the public internet. Possession of the URL is not authentication, and tailnet access rules do not authenticate public Funnel visitors. This deployment deliberately offers public workout creation/downloads with no account access. If access must be restricted to invited people, use private Tailscale Serve/node sharing, or add authentication before publishing. See [Tailscale Funnel](https://tailscale.com/docs/features/tailscale-funnel).
+The standalone localhost/Vite app still works without app accounts or GB10, using its existing browser-local profile, draft, downloads, and local Garmin bridge. Hosted account data is stored on GB10, not in the standalone SQLite database. The canonical engine and exports are unchanged.
 
-### Build and run on GB10
+### Build the hosted runtime
 
-Copy a clean checkout of this repository to `~/llm-garmin` on GB10. Do not copy your Windows `.env`, `.venv`, databases, Garmin sessions, SSH keys, or `node_modules`. Prefer a dedicated Linux service account with no Garmin or SSH credentials. Install a supported Node.js LTS with npm on GB10; do not copy native dependencies from Windows to Linux/ARM64.
+Use Node.js LTS (22 or newer recommended on GB10), npm, Python 3.12+, and Linux `acl` tooling (`setfacl`). Keep the runtime at `~/projects/llm-garmin`. Do not copy Windows `.env`, `.venv`, databases, Garmin sessions, SSH keys, or `node_modules` to GB10. Install native SQLite dependencies on GB10 itself.
 
-Run in the GB10 terminal:
+From a source checkout:
 
 ```bash
-cd ~/llm-garmin
+cd ~/projects/llm-garmin
 npm ci
 npm test
 npm run typecheck
 npm run build
-PUBLIC_ORIGIN=https://promaxgb10-4e2b.tail06a565.ts.net:8443 \
-INFERENCE_URL=http://127.0.0.1:8081/v1 \
-PORT=4173 npm run start:shared
+python3 -m venv .venv
+.venv/bin/python -m pip install -r python/requirements.txt
+.venv/bin/python -m unittest discover -s python/tests
 ```
 
-`INFERENCE_URL` must be a loopback HTTP `/v1` endpoint. The default uses port 8081 from the existing GB10 setup; verify that this is the model/gateway's actual local port. Model health is probed at `/health` on the same port. The externally supplied `/v1/health` URL is not evidence of which local port/path serves health. If your gateway differs, use its loopback completion port or adjust the health routing first. Inference is optional: exports and recognized workout formats work when it is unavailable.
+A deployment bundle may instead contain `dist`, `dist-ui`, `python`, `deploy`, the hosted installation/activation scripts, `package.json`, and `package-lock.json`; run `npm ci --omit=dev` and prepare the Python environment on GB10. It contains no private configuration or user data. Direct Python dependencies are pinned to the versions checked on GB10. Assets from existing releases can be retained for already-open browser tabs.
 
-`PUBLIC_ORIGIN` is required, includes the public HTTPS port, and must have no trailing slash. The server binds only to `127.0.0.1`; Tailscale handles HTTPS. It accepts the configured Host and, for inference POSTs, the matching Origin. No forwarded identity headers are trusted. Verify that your proxy preserves the original Host; do not remove these checks to fix a proxy configuration.
-
-Optional `INFERENCE_API_KEY` is a server environment variable. It is never returned to visitors or read from a `VITE_` variable. Use a private service environment file outside the repository if needed; do not include keys in URLs or browser settings. Shared mode hides model endpoint/key settings and host controls. The local app retains its existing settings.
-
-### Start it as a user service
-
-The supplied [service template](deploy/workout-builder.service) expects `~/llm-garmin` and `/usr/bin/node`. Check `command -v node` and edit `ExecStart` if needed; systemd does not load interactive shell/NVM configuration. The service has a different name from the existing `llm-garmin.service` model service.
+When a tested release is already prepared in `~/projects/llm-garmin-hosted-staging`, initial activation can be completed with one command in an interactive GB10 terminal:
 
 ```bash
-mkdir -p ~/.config/systemd/user
-cp deploy/workout-builder.service ~/.config/systemd/user/workout-builder.service
-systemctl --user daemon-reload
-systemctl --user enable --now workout-builder.service
-systemctl --user status workout-builder.service
+sudo bash ~/projects/llm-garmin-hosted-staging/scripts/activate-hosted-service.sh ~/projects/llm-garmin ray
 ```
 
-An administrator may need to enable lingering for the dedicated account so its user service survives logout. The model service must also be running. Diagnostic logs are available with `journalctl --user -u workout-builder.service -n 50 --no-pager`.
+Replace `ray` with your chosen first app username. The script backs up the old runtime, preserves the existing model launch scripts and routing, prepares the final-path Python environment, installs the dedicated service, and prompts for the account's hidden temporary password before switching services. It checks the served page and unauthenticated API rejection, restoring the old runtime/user service on activation failure. It requires sudo, `setfacl`, and an interactive terminal. It does not overwrite an existing app account's password. Use this helper only for the initial switch; later upgrades should back up runtime and private data as described below.
 
-### Point Funnel at the app
+### Install the dedicated service and create accounts
 
-First inspect your existing routes to avoid replacing the model endpoint unintentionally:
+The [production service template](deploy/workout-builder-hosted.service) runs as the dedicated `workout-builder` OS account. The installer grants that account read/traverse access only to the required runtime components and creates private storage at `/var/lib/local-workout-builder`. It has no access to the owner's SSH files. This replaces the earlier read-only Node permission setup because authenticated hosting requires database writes and a fixed Python child process.
+
+Run in an interactive GB10 terminal (sudo is required):
 
 ```bash
-tailscale serve status
-tailscale funnel status
-curl -i -H 'Host: promaxgb10-4e2b.tail06a565.ts.net:8443' http://127.0.0.1:4173/
+cd ~/projects/llm-garmin
+sudo bash scripts/install-hosted-service.sh "$PWD"
+sudo -u workout-builder env WORKOUT_DATA_DIR=/var/lib/local-workout-builder \
+  /usr/bin/node "$PWD/dist/shared/admin.js" create ray
 ```
 
-Once the app is running and verified, make port 8443 serve it:
+The account command prompts twice for a hidden temporary password of at least 12 characters. Do not pass passwords through arguments, environment variables, or chat. Repeat `create USERNAME` for each invited user. Use `reset USERNAME` to set a new temporary password or `disable USERNAME` to revoke access. Password changes, resets, and disabling revoke existing app sessions. Users must change temporary passwords before accessing personal APIs. No administrator has to know their final password. Account CLI commands must run as the same OS user and with the same `WORKOUT_DATA_DIR` as the service.
+
+After at least one account exists, switch services:
+
+```bash
+systemctl --user disable --now workout-builder.service
+sudo systemctl enable --now workout-builder-hosted.service
+sudo systemctl status workout-builder-hosted.service
+```
+
+The earlier [user-service template](deploy/workout-builder.service) is retained for development under a trusted OS account; production should use the dedicated system service. Do not run both services on port 4173. The existing `llm-garmin.service` model service stays separate.
+
+### Routing and verification
+
+Keep HTTPS port 8443 pointing at loopback port 4173:
 
 ```bash
 tailscale funnel --bg --https=8443 http://127.0.0.1:4173
 ```
 
-This deliberately replaces the existing root handler on HTTPS port 8443. The shared browser uses `/api/inference/v1`, not the former `:8443/v1` model URL. Keep local clients on a separate, tailnet-only model route:
+The public origin defaults to `https://promaxgb10-4e2b.tail06a565.ts.net:8443`. Edit the installed system unit if the hostname changes. `INFERENCE_URL` must be a loopback HTTP `/v1` endpoint; the default is `http://127.0.0.1:8081/v1`, with health at `/health`. Keep the separate raw model route private on port 10000. Do not reset unrelated Tailscale routes or expose the Vite server. Possession of a Funnel URL is not authentication; the app's own account session authorizes personal APIs.
 
-```bash
-tailscale serve --bg --https=10000 http://127.0.0.1:8081
-```
+Visit the HTTPS URL, change the temporary password, sign in again, and connect Garmin with its own credentials/MFA. Confirm the destination account, reviewed workout, and absolute day before sending. The experimental adapter uploads, reads back, schedules, and verifies; it does not verify watch delivery. No real Garmin write is needed for automated tests.
 
-The local app now defaults to `:10000/v1`; its Start GB10 control also uses port 10000 so it cannot overwrite the shared app. Do not enable Funnel for this raw model port. Do not reset all Tailscale routes: your existing port 443 setup may serve other services. This app's limits do not protect any separate gateway on port 443.
+Test two app accounts in separate browser profiles and one account on two devices. Check that baselines, saved workouts, Garmin MFA, disconnect, and send operations remain isolated. Unauthenticated personal APIs return 401; `/api/local/*`, dotfiles, and private files remain unavailable. `/api/shared/health` exposes only model readiness. Two model generations run concurrently, at most five wait, and each user may have one outstanding generation. Queue waits expire after 90 seconds; users see a waiting/interpreting state and can retry busy requests.
 
-Open `https://promaxgb10-4e2b.tail06a565.ts.net:8443/` from a browser outside your tailnet. Check workout editing and FIT/JSON downloads, verify that Garmin login and host-start buttons are absent, and verify that `/.env` and `/api/local/garmin/status` return 404. `/api/shared/health` should return only a model readiness state. Check two separate browser profiles to confirm saved athlete baselines stay separate. People sharing one browser profile share its local data; changing from localhost to this HTTPS origin does not migrate previous browser storage.
+### Private storage, backups, and diagnostics
 
-The public server allows only the built index, flat JS/CSS assets and its three explicit routes. It applies a same-origin content policy, rejects oversized/invalid inference requests, strips model response metadata, limits generation to 8192 output tokens and 90 seconds, permits two active requests and 30 requests per minute across all visitors. These bounds protect capacity but are not authentication; public visitors can consume that allowance. External Google Fonts are blocked by the shared content policy, so system fonts are used. There are no public login, account-management or shared history features.
+`WORKOUT_DATA_DIR` must be an absolute, non-symlinked directory outside the runtime, owned by the service account. It contains the versioned `accounts.sqlite` database and `garmin/<internal-user-id>/` directories with private tokens, locks, and durable per-user receipts. Passwords use salted scrypt hashes; app sessions use hashed random tokens and HTTPS-only HttpOnly cookies with CSRF protection. Sessions expire after 24 hours idle or seven days total. Garmin passwords and MFA codes travel through stdin to the bridge and are never saved; tokens are protected by filesystem permissions. Hosted bridge processes never read the owner's `.env` or fall back to an owner Garmin directory.
 
-The deployed GB10 runtime contains only `dist/shared`, `dist-ui`, a minimal package manifest with pinned Zod, and the service template. It contains no Garmin/Python bridge, SQLite data, source tree, or copied local configuration. Node runtime permissions allow reads only of those runtime files and dependencies, deny file writes and child processes, and do not replace OS account isolation. The user service runs under `rchia`; a dedicated OS account would provide stronger separation. GB10 disables unprivileged user namespaces, so this template omits namespace-dependent systemd protections. See [Node permissions](https://nodejs.org/docs/latest-v22.x/api/permissions.html).
+For a consistent backup, stop the hosted service and copy the entire private data directory, including any SQLite WAL files and Garmin receipts, to an access-restricted location outside the runtime. Restart afterward. To restore, stop the service, restore the directory, and set ownership to `workout-builder` with directory mode 700 and file mode 600 before restarting. Treat backups as credentials. A database newer than the application fails startup instead of being downgraded. Old single-user databases and anonymous browser data are not automatically assigned to a hosted user.
 
-Live Qwen3-4B testing returned schema-valid JSON but omitted a requested date and misread warm-up duration and threshold intensity. Always inspect the absolute date, durations and targets before export. Recognized sectioned formats remain deterministic and do not use the model. Model quality improvement is separate from hosting and account protection.
-
-Verify the GB10 service, Funnel routing, browser rendering and local inference after each deployment. `/api/shared/health` reports readiness; it does not certify interpretation accuracy.
+Use `sudo journalctl -u workout-builder-hosted.service -n 50 --no-pager` for diagnostics. Logs must not contain passwords, tokens, prompts, profiles, or workout payloads. Before replacing a deployed runtime, back up its installed unit, runtime, and private data. Rollback restores those together; do not roll an older application over a newer database migration. The service fails closed if its private storage cannot be configured. Local creation and FIT/JSON downloads remain available in the standalone app during hosted outages.
 
 ## GB10 access and SSH key setup (optional)
 
@@ -534,6 +539,8 @@ src/domain/    schemas and canonical types
 src/engine/    sport calculations and target resolution
 src/dates/     deterministic calendar helpers
 src/storage/   SQLite persistence
+src/shared/    hosted accounts, user-owned storage, authenticated APIs and inference queue
+src/local/     isolated Garmin bridge and localhost-only machine controls
 src/demo.ts    command-line proof of the core flow
 src/ui/        browser review interface
 src/llm/       provider interface, llama-server adapter, and interpretation compiler
@@ -542,4 +549,4 @@ tests/         fixtures and behavior tests
 data/          local database files
 ```
 
-Future phases can attach an LLM before the canonical model and UI/export/integration adapters after the engine without changing the domain calculations.
+Local and hosted application services use the same canonical engine and export adapters; authentication and ownership stay outside the domain calculations.

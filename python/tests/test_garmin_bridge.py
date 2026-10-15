@@ -298,6 +298,30 @@ sys.exit(bridge.main())
         self.assertEqual(path, self.directory.resolve())
         self.assertFalse(dotenv.dotenv_values.call_args.kwargs["interpolate"])
 
+    def test_hosted_config_never_uses_owner_email_or_dotenv(self):
+        dotenv = Mock()
+        with patch.dict(sys.modules, {"dotenv": dotenv}), patch.dict(os.environ, {
+            "GARMIN_HOSTED": "1", "GARMIN_SESSION_DIR": str(self.directory), "GARMIN_EMAIL": "owner@example.invalid"
+        }):
+            email, path = load_config()
+        self.assertIsNone(email)
+        self.assertEqual(path, self.directory.resolve())
+        dotenv.dotenv_values.assert_not_called()
+
+    def test_hosted_config_requires_an_explicit_user_directory(self):
+        with patch.dict(os.environ, {"GARMIN_HOSTED": "1", "GARMIN_SESSION_DIR": ""}):
+            with self.assertRaises(BridgeError) as error:
+                load_config()
+        self.assertEqual(str(error.exception), "CONFIG_INVALID")
+
+    def test_hosted_missing_tokens_never_attempt_library_fallback(self):
+        factory = Mock()
+        with patch.dict(os.environ, {"GARMIN_HOSTED": "1"}):
+            with self.assertRaises(BridgeError) as error:
+                get_client(self.directory, factory=factory)
+        self.assertEqual(str(error.exception), "AUTH_REQUIRED")
+        factory.assert_not_called()
+
     @unittest.skipUnless(os.name == "nt", "Windows ACL integration check")
     def test_real_windows_storage_permissions(self):
         # Disposable storage only: no Garmin account, credentials, or existing tokens.
